@@ -1,0 +1,209 @@
+/* ═══════════════════════════════════════════════════════════════
+   QuakeView — elapsed_timer.html 専用スタイル
+   elapsed_timer.css  |  QuakeView_personal
+   依存: quakeview.css を先に読み込むこと
+═══════════════════════════════════════════════════════════════ */
+  /* ── elapsed_timer ページ固有スタイル ── */
+
+  :root {
+    --accent2: #ff6b35;   /* timer 独自: オレンジアクセント */
+  }
+
+  /* ── body: グリッドレイアウト + グリッド背景 ── */
+  body {
+    display: grid;
+    gap: 1rem;
+    padding: 1.25rem clamp(.75rem, 3vw, 2rem);
+    background-image:
+      linear-gradient(rgba(0,229,255,.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,229,255,.025) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+
+  /* ── コントロール行 ── */
+  .controls-row { display: grid; grid-template-columns: 1fr; gap: .6rem; }
+
+  /* ── 数値・フォーム ── */
+  hr.divider { border: none; border-top: 1px solid var(--border); margin: .6rem 0; }
+  .input-row { display: flex; gap: .4rem; align-items: center; margin-bottom: .38rem; }
+  input[type=number],
+  input[type=datetime-local] {
+    flex: 1; min-width: 0;
+    font-size: .78rem;
+    padding: .38rem .58rem;
+  }
+
+  /* ── breakdown / unit ── */
+  .breakdown {
+    display: flex; justify-content: center;
+    gap: .8rem; flex-wrap: wrap; margin: .45rem 0 .6rem;
+  }
+  .unit { text-align: center; }
+  .unit-val {
+    font-family: var(--mono);
+    font-size: clamp(.85rem, 1.8vw, 1.1rem);
+    color: var(--text); display: block;
+  }
+  .unit-lbl { font-size: .5rem; letter-spacing: .15em; color: var(--dim); text-transform: uppercase; }
+  .unit-sep {
+    font-family: var(--mono);
+    font-size: clamp(.85rem, 1.8vw, 1.1rem);
+    color: var(--border); align-self: flex-start;
+  }
+
+  /* ── マップカード ── */
+  #map-card { padding: .85rem 1rem; }
+  #wavefront-map { height: clamp(16rem, 55vh, 52rem); border-radius: 3px; border: 1px solid var(--border); }
+
+  /* ── XML import ── */
+  #xml-card input[type="text"] {
+    flex: 1; min-width: 0;
+    font-size: .72rem;
+    padding: .38rem .58rem;
+  }
+
+  @media (max-width: 44rem) {
+    .controls-row { grid-template-columns: 1fr; }
+  }
+
+/* ── 10. Clock / Live インジケーター ───────────────────────── */
+.header-right { text-align: right; }
+#clock {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--amber);
+}
+.live {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--teal);
+  letter-spacing: .15em;
+  margin-top: 3px;
+}
+.dot {
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--teal);
+  animation: blink 2s ease-in-out infinite;
+}
+
+/* ── 14. Card コンポーネント ────────────────────────────────── */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1rem 1.25rem;
+  position: relative;
+  overflow: hidden;
+}
+/* 四隅の装飾 */
+.card::before,
+.card::after {
+  content: '';
+  position: absolute;
+  width: .75rem; height: .75rem;
+  border-color: var(--cyan);
+  border-style: solid;
+  opacity: .4;
+}
+.card::before { top: .3rem; left: .3rem; border-width: 1px 0 0 1px; }
+.card::after  { bottom: .3rem; right: .3rem; border-width: 0 1px 1px 0; }
+
+/* ── 24. ステータスバー ────────────────────────────────────── */
+.status-bar {
+  margin-top: .55rem;
+  font-family: var(--mono);
+  font-size: .58rem;
+  color: var(--dim);
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: .3rem;
+}
+#origin-display { color: var(--text); }
+#tick-dot {
+  display: inline-block;
+  width: .35rem; height: .35rem;
+  border-radius: 50%;
+  background: var(--cyan);
+  margin-right: .3em;
+  animation: pulse 1s steps(1) infinite;
+}
+
+/* ── 28. arrival phases テーブル ────────────────────────────── */
+.arr-hdr-row,
+.arrival-row {
+  display: grid;
+  grid-template-columns: 8.5rem 1fr 1fr 7.5rem;
+  gap: .4rem;
+  align-items: center;
+  padding: .2rem .65rem;
+}
+.arrival-row {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: .42rem .65rem;
+  margin-bottom: .28rem;
+}
+.arr-section-hdr {
+  font-family: var(--mono);
+  font-size: .55rem;
+  letter-spacing: .18em;
+  color: var(--dim);
+  padding: .5rem .65rem .2rem;
+  text-transform: uppercase;
+}
+.arr-phase { font-family: var(--mono); font-size: .7rem; font-weight: bold; }
+.arr-tt    { font-family: var(--mono); font-size: .7rem; color: var(--text); }
+.arr-abs   { font-family: var(--mono); font-size: .66rem; color: var(--text); }
+.arr-cd {
+  font-family: var(--mono);
+  font-size: .7rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.arr-cd.waiting { color: var(--cyan); }
+.arr-cd.arrived { color: var(--dim); }
+.arr-note {
+  font-family: var(--mono);
+  font-size: .54rem;
+  color: var(--dim);
+  padding-left: 9.5rem;
+  margin-top: -.15rem;
+  margin-bottom: .2rem;
+}
+.arr-none {
+  font-family: var(--mono);
+  font-size: .7rem;
+  color: var(--dim);
+  padding: .3rem .65rem;
+}
+
+/* ── 29. KS バッジ ─────────────────────────────────────────── */
+.ks-badge {
+  display: inline-block;
+  padding: 3px 12px;
+  border-radius: 2px;
+  font-family: var(--mono);
+  font-size: .75rem;
+  font-weight: 600;
+}
+
+/* ── 36. レスポンシブ（elapsed_timer 関連） ─────────────────── */
+@media (max-width: 700px) {
+  .arr-hdr-row,
+  .arrival-row {
+    grid-template-columns: 7rem 1fr 1fr 6rem;
+  }
+  .arr-note { padding-left: 8rem; }
+}
+@media (max-width: 30rem) {
+  .big-number { font-size: clamp(1.6rem, 9vw, 2.6rem); }
+  .arrival-row,
+  .arr-hdr-row { grid-template-columns: 6rem 1fr 5.5rem; }
+  .arr-abs { display: none; }
+}

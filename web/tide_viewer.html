@@ -1,0 +1,667 @@
+<!-- Created: 2026-05-22 JST -->
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>潮位観測ビューア — QuakeView</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600&family=Noto+Sans+JP:wght@300;400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/quakeview.css">
+</head>
+<body class="tide-body">
+
+<!-- ── ヘッダー ──────────────────────────────────────────────── -->
+<header class="tide-header">
+  <div style="display:flex;align-items:center;gap:10px;">
+    <a href="../index.html" class="nav-logo">
+      <span class="nav-logo-icon">🌊</span>
+      <span class="nav-logo-text">QuakeView</span>
+    </a>
+    <span class="header-divider"></span>
+    <div>
+      <div class="logo-tag">TIDE MONITOR</div>
+      <h1>潮位観測ビューア <small>Sea Level</small></h1>
+    </div>
+  </div>
+  <div class="header-right">
+    <div id="tide-clock" class="live" style="font-size:11px;color:var(--amber);"></div>
+    <div class="live" style="margin-top:4px;">
+      <span class="dot"></span>
+      <span>LIVE</span>
+    </div>
+  </div>
+</header>
+
+<!-- ── メインエリア ──────────────────────────────────────────── -->
+<div class="tide-main">
+
+  <!-- ── 左サイドバー ── -->
+  <aside class="tide-sidebar">
+
+    <!-- データソース切替タブ -->
+    <div class="tide-tabs">
+      <button class="tide-tab active" data-source="jcg" id="tab-jcg">海保</button>
+      <button class="tide-tab"        data-source="jma" id="tab-jma">気象庁</button>
+    </div>
+
+    <!-- 検索 -->
+    <div class="tide-search-wrap" id="tide-search-wrap">
+      <input type="text" class="tide-search" id="tide-search"
+             placeholder="地点名で検索…" autocomplete="off">
+    </div>
+
+    <!-- 地点リスト -->
+    <div class="tide-station-list" id="tide-station-list"></div>
+
+  </aside>
+
+  <!-- ── コンテンツエリア ── -->
+  <main class="tide-content" id="tide-content">
+
+    <!-- 未選択時 -->
+    <div class="tide-empty" id="tide-empty">
+      <span class="tide-empty-icon">🌊</span>
+      <span>観測点を選択してください</span>
+    </div>
+
+    <!-- 地点詳細（選択後） -->
+    <div id="tide-detail" style="display:none;flex-direction:column;gap:16px;">
+
+      <!-- 情報バー -->
+      <div class="tide-info-bar" id="tide-info-bar">
+        <div class="tide-info-item">
+          <span class="tide-info-label">観測点</span>
+          <span class="tide-info-value" id="tide-station-name">—</span>
+        </div>
+        <div class="tide-info-item">
+          <span class="tide-info-label">管轄</span>
+          <span class="tide-info-value small" id="tide-station-source">—</span>
+        </div>
+        <div class="tide-info-item">
+          <span class="tide-info-label">地域</span>
+          <span class="tide-info-value small" id="tide-station-region">—</span>
+        </div>
+        <div class="tide-info-item">
+          <span class="tide-info-label">観測点ID</span>
+          <span class="tide-info-value small" id="tide-station-id">—</span>
+        </div>
+        <a href="#" class="tide-source-link" id="tide-source-link"
+           target="_blank" rel="noopener">元サイトを開く ↗</a>
+      </div>
+
+      <!-- ステータスバー -->
+      <div class="tide-status-bar">
+        <span class="tide-live"><span class="dot"></span>LIVE</span>
+        <span class="tide-updated" id="tide-updated"></span>
+        <span class="tide-countdown" id="tide-countdown"></span>
+        <button class="btn" id="tide-refresh-btn" style="font-size:9px;padding:3px 10px;">
+          ↺ 今すぐ更新
+        </button>
+      </div>
+
+      <!-- 潮汐曲線 -->
+      <div class="tide-graph-section">
+        <span class="tide-graph-label">潮汐曲線（本日）</span>
+        <img class="tide-graph-img" id="tide-graph-main" alt="潮汐曲線">
+        <div class="tide-img-error" id="tide-err-main">
+          画像を取得できませんでした（観測点データなし／通信障害の可能性があります）
+        </div>
+      </div>
+
+      <!-- 偏差グラフ -->
+      <div class="tide-graph-section">
+        <span class="tide-graph-label">偏差（観測値 − 予測値）</span>
+        <img class="tide-graph-img" id="tide-graph-diff" alt="偏差グラフ">
+        <div class="tide-img-error" id="tide-err-diff">
+          偏差グラフを取得できませんでした
+        </div>
+      </div>
+
+    </div>
+
+    <!-- JMA セクション（気象庁タブ選択時） -->
+    <div id="tide-jma-section" style="display:none;">
+      <div class="tide-jma-wrap">
+        <div class="tide-jma-card">
+          <div class="tide-jma-title">気象庁 潮位観測情報</div>
+          <div class="tide-jma-desc">
+            気象庁が全国の検潮所で観測した潮位データ（毎時観測値・潮位偏差）をリアルタイムで提供するページです。<br>
+            高潮・津波発生時の監視・分析に利用できます。
+          </div>
+          <a class="tide-jma-link"
+             href="https://www.jma.go.jp/bosai/tidelevel/"
+             target="_blank" rel="noopener">
+            ↗ 気象庁 潮位観測情報を開く
+          </a>
+        </div>
+        <div class="tide-jma-card">
+          <div class="tide-jma-title">気象庁 観測地点一覧</div>
+          <div class="tide-jma-desc">
+            全国約100地点の潮位観測地点から任意の地点を選択してデータを確認できます。
+          </div>
+          <a class="tide-jma-link"
+             href="https://www.jma.go.jp/bosai/tidelevel/pointlist.html"
+             target="_blank" rel="noopener">
+            ↗ 観測地点一覧を開く
+          </a>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<script>
+// Created: 2026-05-22 JST
+
+/* ═══════════════════════════════════════════════════
+   ① 純粋ロジック関数
+═══════════════════════════════════════════════════ */
+
+/** 全 JCG 観測点定義 */
+function getJcgStations() {
+  return [
+    // 北海道
+    { id: '0001', name: '稚内',       en: 'Wakkanai',    region: '北海道' },
+    { id: '0004', name: '網走',       en: 'Abashiri',    region: '北海道' },
+    { id: '0006', name: '花咲',       en: 'Hanasaki',    region: '北海道' },
+    { id: '0008', name: '釧路',       en: 'Kushiro',     region: '北海道' },
+    { id: '0016', name: '函館',       en: 'Hakodate',    region: '北海道' },
+    { id: '0023', name: '小樽',       en: 'Otaru',       region: '北海道' },
+    // 東北
+    { id: '0029', name: '下北',       en: 'Shimokita',   region: '東北' },
+    { id: '0032', name: '深浦',       en: 'Fukaura',     region: '東北' },
+    { id: '0033', name: '竜飛',       en: 'Tappi',       region: '東北' },
+    { id: '0035', name: '宮古',       en: 'Miyako',      region: '東北' },
+    { id: '0036', name: '釜石',       en: 'Kamaishi',    region: '東北' },
+    { id: '0037', name: '大船渡',     en: 'Ofunato',     region: '東北' },
+    { id: '0038', name: '鮎川',       en: 'Ayukawa',     region: '東北' },
+    { id: '0042', name: '小名浜',     en: 'Onahama',     region: '東北' },
+    // 関東
+    { id: '0052', name: '布良',       en: 'Mera',        region: '関東' },
+    { id: '0053', name: '千葉',       en: 'Chiba',       region: '関東' },
+    { id: '0054', name: '東京',       en: 'Tokyo',       region: '関東' },
+    { id: '0062', name: '横浜',       en: 'Yokohama',    region: '関東' },
+    { id: '0063', name: '横須賀',     en: 'Yokosuka',    region: '関東' },
+    { id: '0065', name: '小田原',     en: 'Odawara',     region: '関東' },
+    // 伊豆・小笠原
+    { id: '0055', name: '岡田',           en: 'Okada',           region: '伊豆・小笠原' },
+    { id: '0056', name: '神津島',         en: 'Kozushima',       region: '伊豆・小笠原' },
+    { id: '0057', name: '三宅島(阿古)',   en: 'Miyakejima',      region: '伊豆・小笠原' },
+    { id: '0058', name: '三宅島(坪田)',   en: 'Miyakejima',      region: '伊豆・小笠原', noImg: true },
+    { id: '0059', name: '八丈島',         en: 'Hachijyoujima',   region: '伊豆・小笠原' },
+    { id: '0060', name: '父島',           en: 'Chichijima',      region: '伊豆・小笠原' },
+    // 東海
+    { id: '0068', name: '石廊崎',     en: 'Irozaki',     region: '東海' },
+    { id: '0070', name: '内浦',       en: 'Uchiura',     region: '東海' },
+    { id: '0071', name: '清水港',     en: 'Shimizu',     region: '東海' },
+    { id: '0073', name: '御前崎',     en: 'Omaezaki',    region: '東海' },
+    { id: '0074', name: '舞阪',       en: 'Maisaka',     region: '東海' },
+    { id: '0075', name: '赤羽根',     en: 'Akabane',     region: '東海' },
+    { id: '0079', name: '名古屋',     en: 'Nagoya',      region: '東海' },
+    { id: '0081', name: '鳥羽',       en: 'Toba',        region: '東海' },
+    { id: '0082', name: '尾鷲',       en: 'Owase',       region: '東海' },
+    { id: '0083', name: '熊野',       en: 'Kumano',      region: '東海' },
+    // 北陸
+    { id: '0087', name: '佐渡',       en: 'Sado',        region: '北陸' },
+    { id: '0089', name: '粟島',       en: 'Awashima',    region: '北陸' },
+    { id: '0091', name: '富山',       en: 'Toyama',      region: '北陸' },
+    { id: '0095', name: '能登',       en: 'Noto',        region: '北陸' },
+    // 近畿
+    { id: '0101', name: '和歌山',     en: 'Wakayama',    region: '近畿' },
+    { id: '0103', name: '御坊',       en: 'Gobo',        region: '近畿' },
+    { id: '0104', name: '白浜',       en: 'Shirahama',   region: '近畿' },
+    { id: '0105', name: '串本',       en: 'Kushimoto',   region: '近畿' },
+    { id: '0106', name: '浦神',       en: 'Uragami',     region: '近畿' },
+    { id: '0107', name: '大阪',       en: 'Osaka',       region: '近畿' },
+    { id: '0108', name: '淡輪',       en: 'Tannowa',     region: '近畿' },
+    { id: '0109', name: '神戸',       en: 'Kobe',        region: '近畿' },
+    { id: '0111', name: '洲本',       en: 'Sumoto',      region: '近畿' },
+    { id: '0113', name: '舞鶴',       en: 'Maizuru',     region: '近畿' },
+    // 中国
+    { id: '0115', name: '宇野',       en: 'Uno',         region: '中国' },
+    { id: '0117', name: '呉',         en: 'Kure',        region: '中国' },
+    { id: '0118', name: '広島',       en: 'Hiroshima',   region: '中国' },
+    { id: '0120', name: '境',         en: 'Sakai',       region: '中国' },
+    { id: '0121', name: '浜田',       en: 'Hamada',      region: '中国' },
+    { id: '0122', name: '西郷',       en: 'Saigo',       region: '中国' },
+    { id: '0136', name: '徳山',       en: 'Tokuyama',    region: '中国' },
+    // 四国
+    { id: '0123', name: '高松',       en: 'Takamatsu',   region: '四国' },
+    { id: '0127', name: '小松島',     en: 'Komatsushima', region: '四国' },
+    { id: '0128', name: '阿波由岐',   en: 'Awayuki',     region: '四国' },
+    { id: '0129', name: '室戸岬',     en: 'Muroto',      region: '四国' },
+    { id: '0130', name: '高知',       en: 'Kochi',       region: '四国' },
+    { id: '0132', name: '土佐清水',   en: 'Tosa_Shimizu', region: '四国' },
+    { id: '0133', name: '松山',       en: 'Matsuyama',   region: '四国' },
+    { id: '0134', name: '宇和島',     en: 'Uwajima',     region: '四国' },
+    // 九州
+    { id: '0149', name: '博多',       en: 'Hakata',      region: '九州' },
+    { id: '0152', name: '大浦',       en: 'Oura',        region: '九州' },
+    { id: '0154', name: '佐世保',     en: 'Sasebo',      region: '九州' },
+    { id: '0156', name: '長崎',       en: 'Nagasaki',    region: '九州' },
+    { id: '0157', name: '口之津',     en: 'Kuchinotsu',  region: '九州' },
+    { id: '0158', name: '厳原',       en: 'Izuhara',     region: '九州' },
+    { id: '0159', name: '対馬比田勝', en: 'Tushima',     region: '九州' },
+    { id: '0161', name: '福江',       en: 'Fukue',       region: '九州' },
+    { id: '0163', name: '大分',       en: 'Oita',        region: '九州' },
+    { id: '0164', name: '佐伯',       en: 'Saiki',       region: '九州' },
+    { id: '0168', name: '苓北',       en: 'Reihoku',     region: '九州' },
+    { id: '0171', name: '油津',       en: 'Aburatsu',    region: '九州' },
+    { id: '0173', name: '大泊',       en: 'Oodomari',    region: '九州' },
+    { id: '0174', name: '鹿児島',     en: 'Kagoshima',   region: '九州' },
+    { id: '0175', name: '枕崎',       en: 'Makurazaki',  region: '九州' },
+    // 南西諸島
+    { id: '0177', name: '西之表',   en: 'Nishinoomote', region: '南西諸島' },
+    { id: '0178', name: '種子島',   en: 'Tanegashima',  region: '南西諸島' },
+    { id: '0179', name: '中之島',   en: 'Nakanoshima',  region: '南西諸島' },
+    { id: '0180', name: '名瀬',     en: 'Naze',         region: '南西諸島' },
+    { id: '0181', name: '奄美',     en: 'Amami',        region: '南西諸島' },
+    { id: '0184', name: '那覇',     en: 'Naha',         region: '南西諸島' },
+    { id: '0185', name: '南大東',   en: 'Minamidaito',  region: '南西諸島' },
+    { id: '0187', name: '石垣',     en: 'Ishigaki',     region: '南西諸島' },
+    { id: '0188', name: '与那国',   en: 'Yonaguni',     region: '南西諸島' },
+  ];
+}
+
+/**
+ * JCG 画像 URL を返す（キャッシュ破壊用タイムスタンプ付き）
+ * @param {string} en  英語地点名
+ * @param {'main'|'diff'} type
+ * @param {number} ts  UNIXミリ秒
+ * @returns {string}
+ */
+function buildJcgImgUrl(en, type, ts) {
+  const BASE = 'https://www1.kaiho.mlit.go.jp/TIDE/gauge/temp/';
+  const suffix = type === 'diff' ? '_diff' : '';
+  return `${BASE}${en}${suffix}.png?t=${ts}`;
+}
+
+/**
+ * JCG 観測ページ URL を返す
+ * @param {string} id  4桁観測点ID
+ * @returns {string}
+ */
+function buildJcgPageUrl(id) {
+  return `https://www1.kaiho.mlit.go.jp/TIDE/gauge/gauge.php?s=${id}`;
+}
+
+/**
+ * JST 現在時刻を hh:mm:ss 形式で返す
+ * @param {number} nowMs  UNIXミリ秒
+ * @returns {string}
+ */
+function formatJstTime(nowMs) {
+  return new Date(nowMs).toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour12: false });
+}
+
+/**
+ * 更新日時ラベルを返す
+ * @param {number} updatedMs  UNIXミリ秒
+ * @returns {string}
+ */
+function formatUpdatedLabel(updatedMs) {
+  const t = new Date(updatedMs).toLocaleTimeString('ja-JP', {
+    timeZone: 'Asia/Tokyo', hour12: false, hour: '2-digit', minute: '2-digit'
+  });
+  return `最終更新 ${t}`;
+}
+
+/**
+ * カウントダウン文字列を返す
+ * @param {number} remainMs  残りミリ秒
+ * @returns {string}
+ */
+function formatCountdown(remainMs) {
+  const sec = Math.max(0, Math.ceil(remainMs / 1000));
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `次回更新まで ${m}:${String(s).padStart(2, '0')}`;
+}
+
+/**
+ * 検索文字列で地点リストをフィルタリングして返す
+ * @param {Array}  stations
+ * @param {string} query
+ * @returns {Array}
+ */
+function filterStations(stations, query) {
+  const q = query.trim().toLowerCase();
+  if (!q) return stations;
+  return stations.filter(s => s.name.includes(q) || s.region.includes(q) || s.en.toLowerCase().includes(q));
+}
+
+/**
+ * 地域グループに分割して返す  { region: string, items: Array }[]
+ * @param {Array} stations
+ * @returns {Array}
+ */
+function groupByRegion(stations) {
+  const map = new Map();
+  for (const s of stations) {
+    if (!map.has(s.region)) map.set(s.region, []);
+    map.get(s.region).push(s);
+  }
+  return [...map.entries()].map(([region, items]) => ({ region, items }));
+}
+
+
+/* ═══════════════════════════════════════════════════
+   ② 描画関数
+═══════════════════════════════════════════════════ */
+
+/**
+ * 地点リストを描画する
+ * @param {HTMLElement} listEl
+ * @param {Array}       groups    groupByRegion() の結果
+ * @param {string|null} selectedId
+ * @param {Function}    onSelect  (station) => void
+ */
+function renderStationList(listEl, groups, selectedId, onSelect) {
+  listEl.innerHTML = '';
+  for (const { region, items } of groups) {
+    const hdr = document.createElement('div');
+    hdr.className = 'tide-region-header';
+    hdr.textContent = region;
+    listEl.appendChild(hdr);
+
+    for (const st of items) {
+      const row = document.createElement('div');
+      row.className = 'tide-station-item' + (st.id === selectedId ? ' selected' : '');
+      row.dataset.id = st.id;
+
+      const nameSpan = document.createElement('span');
+      nameSpan.textContent = st.name;
+
+      const idSpan = document.createElement('span');
+      idSpan.className = 'tide-station-id';
+      idSpan.textContent = st.id;
+
+      row.appendChild(nameSpan);
+      row.appendChild(idSpan);
+      row.addEventListener('click', () => onSelect(st));
+      listEl.appendChild(row);
+    }
+  }
+}
+
+/**
+ * 時計を更新する
+ * @param {HTMLElement} el
+ * @param {number}      nowMs
+ */
+function renderClock(el, nowMs) {
+  el.textContent = formatJstTime(nowMs);
+}
+
+/**
+ * 情報バーを更新する
+ * @param {Object} els   { name, source, region, id, link }
+ * @param {Object} st    観測点オブジェクト
+ * @param {string} pageUrl
+ */
+function renderInfoBar(els, st, pageUrl) {
+  els.name.textContent   = st.name;
+  els.source.textContent = '海上保安庁';
+  els.region.textContent = st.region;
+  els.id.textContent     = st.id;
+  els.link.href          = pageUrl;
+}
+
+/**
+ * グラフ画像を更新する
+ * @param {HTMLImageElement} imgEl
+ * @param {HTMLElement}      errEl
+ * @param {string}           url
+ */
+function renderGraphImage(imgEl, errEl, url) {
+  imgEl.style.display = 'block';
+  errEl.style.display = 'none';
+
+  const tmp = new Image();
+  tmp.onload = () => {
+    imgEl.src = url;
+    imgEl.style.display = 'block';
+    errEl.style.display = 'none';
+  };
+  tmp.onerror = () => {
+    imgEl.style.display = 'none';
+    errEl.style.display = 'block';
+  };
+  tmp.src = url;
+}
+
+/**
+ * ステータスバーを更新する
+ * @param {Object} els       { updated, countdown }
+ * @param {number} updatedMs
+ * @param {number} remainMs
+ */
+function renderStatusBar(els, updatedMs, remainMs) {
+  els.updated.textContent   = formatUpdatedLabel(updatedMs);
+  els.countdown.textContent = formatCountdown(remainMs);
+}
+
+/**
+ * detail エリアの表示・非表示を切り替える
+ * @param {HTMLElement} emptyEl
+ * @param {HTMLElement} detailEl
+ * @param {boolean}     show
+ */
+function renderDetailVisibility(emptyEl, detailEl, show) {
+  emptyEl.style.display        = show ? 'none'  : 'flex';
+  detailEl.style.display       = show ? 'flex'  : 'none';
+}
+
+/**
+ * JCG / JMA ペインを切り替える
+ * @param {HTMLElement} searchWrapEl
+ * @param {HTMLElement} listEl
+ * @param {HTMLElement} jmaEl
+ * @param {HTMLElement} emptyEl
+ * @param {HTMLElement} detailEl
+ * @param {'jcg'|'jma'} source
+ */
+function renderSourceSwitch(searchWrapEl, listEl, jmaEl, emptyEl, detailEl, source) {
+  const isJcg = source === 'jcg';
+  searchWrapEl.style.display = isJcg ? '' : 'none';
+  listEl.style.display       = isJcg ? '' : 'none';
+  jmaEl.style.display        = isJcg ? 'none' : 'flex';
+  if (!isJcg) {
+    emptyEl.style.display  = 'none';
+    detailEl.style.display = 'none';
+  }
+}
+
+
+/* ═══════════════════════════════════════════════════
+   ③ 統合エントリ関数 / 初期化
+═══════════════════════════════════════════════════ */
+
+/** アプリ全体の状態（クロージャで保持） */
+function createAppState() {
+  return {
+    source:      'jcg',        // 'jcg' | 'jma'
+    selectedId:  null,         // 現在選択中の観測点ID
+    query:       '',           // 検索クエリ
+    updatedMs:   0,            // 最終画像読み込み時刻 (ms)
+    refreshMs:   5 * 60 * 1000, // 自動更新間隔 5分
+  };
+}
+
+/**
+ * 観測点を選択して画像を読み込む
+ * @param {Object}  st     観測点
+ * @param {Object}  state  アプリ状態
+ * @param {Object}  els    DOM要素集合
+ */
+function onStationSelected(st, state, els) {
+  state.selectedId = st.id;
+  state.updatedMs  = Date.now();
+
+  const ts     = state.updatedMs;
+  const pageUrl = buildJcgPageUrl(st.id);
+  const mainUrl = buildJcgImgUrl(st.en, 'main', ts);
+  const diffUrl = buildJcgImgUrl(st.en, 'diff', ts);
+
+  renderInfoBar(
+    {
+      name:   els.stationName,
+      source: els.stationSource,
+      region: els.stationRegion,
+      id:     els.stationId,
+      link:   els.sourceLink,
+    },
+    st, pageUrl
+  );
+  renderGraphImage(els.graphMain, els.errMain, mainUrl);
+  renderGraphImage(els.graphDiff, els.errDiff, diffUrl);
+  renderDetailVisibility(els.empty, els.detail, true);
+
+  // リスト選択状態を更新
+  renderStationList(
+    els.stationList,
+    groupByRegion(filterStations(getJcgStations(), state.query)),
+    state.selectedId,
+    (s) => onStationSelected(s, state, els)
+  );
+}
+
+/**
+ * 画像を再読み込みする（選択済み地点がある場合のみ）
+ * @param {Object} state
+ * @param {Object} els
+ */
+function refreshImages(state, els) {
+  if (!state.selectedId) return;
+  const st = getJcgStations().find(s => s.id === state.selectedId);
+  if (!st) return;
+  state.updatedMs = Date.now();
+  const ts     = state.updatedMs;
+  const mainUrl = buildJcgImgUrl(st.en, 'main', ts);
+  const diffUrl = buildJcgImgUrl(st.en, 'diff', ts);
+  renderGraphImage(els.graphMain, els.errMain, mainUrl);
+  renderGraphImage(els.graphDiff, els.errDiff, diffUrl);
+}
+
+/**
+ * tick() — 毎秒呼ばれる統合タイマー
+ * @param {Object} state
+ * @param {Object} els
+ */
+function tick(state, els) {
+  const nowMs = Date.now();
+  renderClock(els.clock, nowMs);
+
+  if (state.source === 'jcg' && state.selectedId) {
+    const elapsed  = nowMs - state.updatedMs;
+    const remain   = state.refreshMs - elapsed;
+    renderStatusBar({ updated: els.updated, countdown: els.countdown }, state.updatedMs, remain);
+
+    // 自動更新
+    if (remain <= 0) refreshImages(state, els);
+  }
+}
+
+/**
+ * 初期化
+ */
+function init() {
+  const stations = getJcgStations();
+  const state    = createAppState();
+
+  // ── DOM要素収集 ──
+  const els = {
+    clock:         document.getElementById('tide-clock'),
+    tabJcg:        document.getElementById('tab-jcg'),
+    tabJma:        document.getElementById('tab-jma'),
+    searchWrap:    document.getElementById('tide-search-wrap'),
+    search:        document.getElementById('tide-search'),
+    stationList:   document.getElementById('tide-station-list'),
+    empty:         document.getElementById('tide-empty'),
+    detail:        document.getElementById('tide-detail'),
+    jmaSection:    document.getElementById('tide-jma-section'),
+    // 情報バー
+    stationName:   document.getElementById('tide-station-name'),
+    stationSource: document.getElementById('tide-station-source'),
+    stationRegion: document.getElementById('tide-station-region'),
+    stationId:     document.getElementById('tide-station-id'),
+    sourceLink:    document.getElementById('tide-source-link'),
+    // ステータス
+    updated:       document.getElementById('tide-updated'),
+    countdown:     document.getElementById('tide-countdown'),
+    refreshBtn:    document.getElementById('tide-refresh-btn'),
+    // グラフ
+    graphMain:     document.getElementById('tide-graph-main'),
+    errMain:       document.getElementById('tide-err-main'),
+    graphDiff:     document.getElementById('tide-graph-diff'),
+    errDiff:       document.getElementById('tide-err-diff'),
+  };
+
+  // ── 初期リスト描画 ──
+  renderStationList(
+    els.stationList,
+    groupByRegion(stations),
+    null,
+    (st) => onStationSelected(st, state, els)
+  );
+
+  // ── タブ切替 ──
+  function switchSource(src) {
+    state.source = src;
+    els.tabJcg.classList.toggle('active', src === 'jcg');
+    els.tabJma.classList.toggle('active', src === 'jma');
+    renderSourceSwitch(
+      els.searchWrap, els.stationList, els.jmaSection,
+      els.empty, els.detail, src
+    );
+    if (src === 'jcg' && !state.selectedId) {
+      renderDetailVisibility(els.empty, els.detail, false);
+    }
+    if (src === 'jcg') {
+      renderStationList(
+        els.stationList,
+        groupByRegion(filterStations(stations, state.query)),
+        state.selectedId,
+        (st) => onStationSelected(st, state, els)
+      );
+    }
+  }
+  els.tabJcg.addEventListener('click', () => switchSource('jcg'));
+  els.tabJma.addEventListener('click', () => switchSource('jma'));
+
+  // ── 検索 ──
+  els.search.addEventListener('input', (e) => {
+    state.query = e.target.value;
+    renderStationList(
+      els.stationList,
+      groupByRegion(filterStations(stations, state.query)),
+      state.selectedId,
+      (st) => onStationSelected(st, state, els)
+    );
+  });
+
+  // ── 手動更新ボタン ──
+  els.refreshBtn.addEventListener('click', () => refreshImages(state, els));
+
+  // ── tick ループ ──
+  setInterval(() => tick(state, els), 1000);
+  tick(state, els); // 即時実行
+}
+
+// ── エントリポイント ──
+document.addEventListener('DOMContentLoaded', init);
+</script>
+
+<!-- ═══ 統合ガイド ════════════════════════════════════════════
+  読み込む場所  : personal.html の <script src="../web/tide_viewer.html"> には
+                  対応していません。スタンドアロンページとして動作します。
+  依存ファイル  : ../css/quakeview.css のみ
+  外部通信先    : https://www1.kaiho.mlit.go.jp/TIDE/gauge/temp/*.png（画像直接読込）
+                  https://www.jma.go.jp/bosai/tidelevel/ （外部リンクのみ）
+  自動更新      : 5分ごとに画像を再読み込み（タイムスタンプ付きクエリで強制更新）
+═══════════════════════════════════════════════════════════ -->
+
+</body>
+</html>

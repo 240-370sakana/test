@@ -1,0 +1,40 @@
+/* ═══════════════════════════════════════════════════════════════
+   QuakeView — hypo_map_viewer.html 専用スタイル
+   hypo_map_viewer.css  |  QuakeView_personal
+   依存: quakeview.css を先に読み込むこと
+═══════════════════════════════════════════════════════════════ */
+
+/* ── 7. QuakeView ロゴ — nav-logo スタイル ──────────────────── */
+.nav-logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  text-decoration: none;
+  margin-bottom: 6px;
+}
+.nav-logo-icon {
+  width: 22px; height: 22px;
+  border-radius: 4px;
+  background: linear-gradient(135deg, var(--cyan) 0%, var(--teal) 100%);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; flex-shrink: 0;
+  box-shadow: 0 0 10px rgba(0, 212, 255, .3);
+}
+.nav-logo-text {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--cyan);
+  letter-spacing: .08em;
+  text-shadow: 0 0 12px rgba(0, 212, 255, .4);
+  transition: color .2s;
+}
+.nav-logo:hover .nav-logo-text { color: #fff; }
+
+.header-divider {
+  width: 1px; height: 28px;
+  background: var(--border2);
+  margin: 0 14px 6px;
+  flex-shrink: 0;
+  align-self: flex-end;
+}

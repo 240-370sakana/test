@@ -1,0 +1,249 @@
+/* ═══════════════════════════════════════════════════════════════
+   § RTM  強震モニタ リアルタイム震度マップ
+   quakeview.css への追加ブロック（末尾に append すること）
+   ─────────────────────────────────────────────────────────────
+   Prefix   : rtm-
+   依存      : quakeview.css の Design Tokens のみ使用
+   追加Token : なし（--red / --green / --amber / --cyan /
+               --text / --text-mid / --text-dim / --mono /
+               --surface / --border / --bg を再利用）
+   ─────────────────────────────────────────────────────────────
+   Structure:
+     RTM-1. Design Tokens  ← 追加トークンなし（既存変数を明記）
+     RTM-2. Layout         ← body / header / main / sidebar
+     RTM-3. Components     ← button states / indicator / legend
+                              alert / stats / detail
+     RTM-4. Utilities      ← error-msg / placeholder / divider
+     RTM-5. Leaflet        ← tooltip / station-label
+═══════════════════════════════════════════════════════════════ */
+
+/* ── RTM-1. Design Tokens ──────────────────────────────────── */
+/*
+  追加トークンなし。以下の既存変数を使用:
+    --bg           ページ背景
+    --surface      サイドバー背景
+    --border       区切り線
+    --cyan         強調値・stat-val
+    --green        OK インジケーター・音声ON
+    --red          エラー・アラート枠
+    --amber        stale インジケーター
+    --text         本文テキスト
+    --text-mid     ラベルテキスト
+    --text-dim     プレースホルダー
+    --mono         等幅フォント
+*/
+
+/* ── RTM-2. Layout ─────────────────────────────────────────── */
+
+/* 全画面フレックスコンテナ: <body class="rtm-body"> に付与 */
+.rtm-body {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ヘッダー内の水平レイアウト（quakeview の header 要素に重ねる） */
+.rtm-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 16px;
+  height: 48px;
+}
+
+/* ステータスバー（右揃え） */
+.rtm-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+}
+
+/* マップ ＋ サイドバーの水平分割 */
+.rtm-main {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* Leaflet マップ描画領域 */
+.rtm-map-area {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 右サイドバー */
+.rtm-sidebar {
+  width: 152px;
+  flex-shrink: 0;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  padding: 12px 8px;
+  overflow-y: auto;
+  font-size: 11px;
+}
+
+/* ── RTM-3. Components ─────────────────────────────────────── */
+
+/* ─ 音声トグルボタン状態（quakeview .btn を拡張） ─ */
+.rtm-audio-btn.enabled  { border-color: var(--green); color: var(--green); }
+.rtm-audio-btn.alerting { border-color: var(--red);   color: var(--red);   }
+
+/* ─ フェッチインジケータードット ─ */
+.rtm-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--green);
+  flex-shrink: 0;
+  transition: background 0.2s;
+}
+.rtm-indicator.error { background: var(--red);   }
+.rtm-indicator.stale { background: var(--amber); }
+
+/* ─ アラートブロック ─ */
+.rtm-alert-block {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--red);
+  border-radius: 3px;
+}
+.rtm-alert-msg {
+  color: var(--green);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  margin-top: 4px;
+}
+
+/* ─ 凡例アイテム ─ */
+.rtm-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+.rtm-legend-item--grad { align-items: flex-start; }
+
+.rtm-legend-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+.rtm-legend-label {
+  font-size: 10px;
+  color: var(--text);
+}
+
+/* グラデーションバー（SI -3 〜 0、NIEDカラーマップ準拠） */
+.rtm-legend-grad {
+  width: 12px;
+  height: 48px;
+  border-radius: 2px;
+  flex-shrink: 0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: linear-gradient(
+    to bottom,
+    rgb(56, 245, 62),
+    rgb(0, 208, 139),
+    rgb(0, 72, 250),
+    rgb(0, 0, 205)
+  );
+}
+.rtm-legend-grad-labels {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 48px;
+  font-size: 10px;
+  color: var(--text);
+}
+
+/* ─ 統計パネル行 ─ */
+.rtm-stat-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 2px 0;
+  color: var(--text);
+}
+.rtm-stat-val {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--cyan);
+}
+
+/* ─ 観測点詳細行 ─ */
+.rtm-detail-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 2px 0;
+  font-size: 10px;
+  color: var(--text);
+}
+.rtm-detail-label { color: var(--text-mid); }
+
+/* ── RTM-4. Utilities ──────────────────────────────────────── */
+
+/* 通信エラーテキスト（ヘッダー右端） */
+.rtm-error-msg {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--red);
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 詳細パネルのデフォルトテキスト */
+.rtm-placeholder {
+  color: var(--text-dim);
+  font-style: italic;
+  font-size: 10px;
+}
+
+/* サイドバーのセクション区切り線 */
+.rtm-divider {
+  margin: 10px 0;
+  border: none;
+  border-top: 1px solid var(--border);
+}
+
+/* ── RTM-5. Leaflet Overrides ───────────────────────────────── */
+
+/* マップ背景（quakeview の #08111a を --bg で上書き） */
+.rtm-map-area .leaflet-container { background: var(--bg) !important; }
+
+/* ツールチップ（三角突起を非表示・デザイン統一） */
+.rtm-map-area .leaflet-tooltip::before { display: none !important; }
+.rtm-map-area .leaflet-tooltip {
+  background: rgba(16, 20, 26, 0.92);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 3px;
+  padding: 4px 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+}
+
+/* 観測点コードラベル（zoom-high クラスが付いた時のみ表示） */
+.rtm-station-label {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  color: var(--text-mid);
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 0 !important;
+  pointer-events: none;
+  white-space: nowrap;
+  opacity: 0.8;
+}
+.leaflet-tooltip-pane .rtm-station-label          { display: none;  }
+.zoom-high .leaflet-tooltip-pane .rtm-station-label { display: block; }
