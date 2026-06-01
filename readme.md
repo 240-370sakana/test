@@ -7,5 +7,7 @@ python {ファイル名}
 Start-Process python -ArgumentList {ファイル名} -WindowStyle Hidden
 
 【注意事項】
-サーバにPythonを使っています。インストールしていない場合は、インストールしてから実行してください。
+制作途中のため、随時アップデートしていきます。
+サーバにPythonを使っています。Pythonの環境がない場合は、インストールしてから実行してください。
 Earthquake vizのページは、データベースに接続されていないため利用できません。
+二次配布禁止。改変禁止。
