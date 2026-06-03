@@ -8,9 +8,9 @@
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600&family=Share+Tech+Mono&family=Noto+Sans+JP:wght@300;400;500&display=swap" rel="stylesheet">
-<!-- Leaflet -->
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<!-- MapLibre GL JS -->
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css"/>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <!-- Chart.js -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <!-- PapaParse -->
@@ -342,7 +342,6 @@
         <button id="reset-btn">RESET</button>
       </div>
     </div>
-    </div><!-- /filter-row -->
   </div><!-- /filter-bar -->
   <div id="viz-main">
 
@@ -380,7 +379,7 @@
 
   <!-- Row4: Table -->
   <div class="panel full-width">
-    <div class="panel-header"><div class="panel-dot" style="background:var(--text-dim)"></div><span class="panel-title">データテーブル</span><span id="table-count" style="margin-left:auto;color:var(--text-dim);font-size:0.7rem;font-family:var(--mono)"></span><button id="csv-export-btn" onclick="exportCSV()">⬇ CSV出力</button></div>
+    <div class="panel-header"><div class="panel-dot" style="background:var(--text-dim)"></div><span class="panel-title">データテーブル</span><span id="table-count" style="margin-left:auto;color:var(--text-dim);font-size:0.7rem;font-family:var(--mono)"></span><select id="table-row-limit" onchange="updateTable()" style="margin-left:12px;font-size:0.7rem;font-family:var(--mono);background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 4px"><option value="300">300件</option><option value="500">500件</option><option value="1000" selected>1000件</option><option value="2000">2000件</option><option value="5000">5000件</option></select><button id="csv-export-btn" onclick="exportCSV()">⬇ CSV出力</button></div>
     <div class="panel-body" style="padding:0">
       <div id="table-wrap"><table id="data-table"><thead id="t-head"></thead><tbody id="t-body"></tbody></table></div>
     </div>
@@ -581,7 +580,7 @@ let _lastVizQuery = null; // 最後のDB取得パラメータ（ETAS再利用用
 let colMap = {};        // 列マッピング
 let csvHeaders = [];    // CSVヘッダー
 let leafletMap = null;
-let markerLayer = null;
+let mapLoaded  = false;
 let charts = {};
 
 const FIELDS = [
@@ -707,7 +706,7 @@ function processData(rows) {
       const depth = parseFloat(r[cDep]);
       const mag   = parseFloat(r[cMag]);
       if (!dt || isNaN(lat) || isNaN(lon) || isNaN(depth) || isNaN(mag)) continue;
-      rawData.push({ dt, lat, lon, depth, mag, place: cPlace ? r[cPlace] : '' });
+      rawData.push({ dt, lat, lon, depth, mag, place: cPlace ? r[cPlace] : '', source: 'csv' });
     }
 
     const pct = Math.round(i / total * 100);
@@ -811,10 +810,11 @@ function showDashboard() {
   if (_dataSource === 'db' && _dbInfo) {
     document.getElementById('db-requery-section').style.display = 'block';
   }
+  window.scrollTo(0, 0);
   if (!leafletMap) initMap();
   updateAll();
   // レイアウト確定後にLeafletのサイズを再計算
-  setTimeout(() => { if (leafletMap) leafletMap.invalidateSize(); }, 100);
+  setTimeout(() => { if (leafletMap) leafletMap.resize(); }, 100);
 }
 
 function updateAll() {
@@ -861,160 +861,182 @@ function updateHeader() {
 /* ─────────────────────────────────────────────
    MAP
 ───────────────────────────────────────────── */
-const MAP_MAX_MARKERS = 30000; // 地図に表示する最大件数
+const MAP_MAX_MARKERS = 400000;
 
-/* ─── デュアルスケールバー制御 (L字型: 縦=N-S / 横=E-W) ─── */
-L.Control.DualScale = L.Control.extend({
-  options: { position: 'bottomleft' },
+/* ── Haversine 距離 (km) ── */
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371, dLat = (lat2-lat1)*Math.PI/180, dLon = (lon2-lon1)*Math.PI/180;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
 
+/* ─── DualScale コントロール (L字型: 縦=N-S / 横=E-W) ─── */
+class DualScaleControl {
   onAdd(map) {
-    const wrap       = L.DomUtil.create('div', 'ds-wrap');
-    this._latLabel   = L.DomUtil.create('div', 'ds-lat-label', wrap);
-    this._L          = L.DomUtil.create('div', 'ds-L',         wrap);
-    this._lonLabel   = L.DomUtil.create('div', 'ds-lon-label', wrap);
-    map.on('zoomend moveend', this._update, this);
-    this._update();
-    return wrap;
-  },
-
-  onRemove(map) {
-    map.off('zoomend moveend', this._update, this);
-  },
-
+    this._map = map;
+    const w = document.createElement('div');
+    w.className = 'maplibregl-ctrl ds-wrap';
+    this._latLabel = document.createElement('div');
+    this._latLabel.className = 'ds-lat-label';
+    this._L = document.createElement('div');
+    this._L.className = 'ds-L';
+    this._lonLabel = document.createElement('div');
+    this._lonLabel.className = 'ds-lon-label';
+    w.appendChild(this._latLabel); w.appendChild(this._L); w.appendChild(this._lonLabel);
+    this._update = this._update.bind(this);
+    map.on('zoomend', this._update); map.on('moveend', this._update);
+    setTimeout(() => this._update(), 0);
+    return w;
+  }
+  onRemove() {
+    this._map.off('zoomend', this._update); this._map.off('moveend', this._update);
+  }
   /* キリの良いスケール値を選ぶ (1/2/5 系列) */
   _niceKm(km) {
-    const exp = Math.pow(10, Math.floor(Math.log10(km)));
-    const f   = km / exp;
-    if (f < 1.5) return exp;
-    if (f < 3.5) return 2 * exp;
-    if (f < 7.5) return 5 * exp;
-    return 10 * exp;
-  },
-
-  _fmtKm(km) {
-    return km >= 1 ? km + ' km' : Math.round(km * 1000) + ' m';
-  },
-
+    const exp = Math.pow(10, Math.floor(Math.log10(km))), f = km / exp;
+    return f < 1.5 ? exp : f < 3.5 ? 2*exp : f < 7.5 ? 5*exp : 10*exp;
+  }
+  _fmtKm(km) { return km >= 1 ? km + ' km' : Math.round(km * 1000) + ' m'; }
   _update() {
-    const map    = this._map;
-    const ctr    = map.latLngToContainerPoint(map.getCenter());
-    const ref    = 100; // 基準ピクセル数
-
-    /* 各方向の km/px を Leaflet の距離関数で計算 */
-    const ll0    = map.containerPointToLatLng(ctr);
-    const llE    = map.containerPointToLatLng(L.point(ctr.x + ref, ctr.y));
-    const llN    = map.containerPointToLatLng(L.point(ctr.x, ctr.y - ref));
-    const kmPxLon = map.distance(ll0, llE) / 1000 / ref;  // E-W km/px
-    const kmPxLat = map.distance(ll0, llN) / 1000 / ref;  // N-S km/px
-
-    /* 目標ピクセル長 (~80px) からキリの良い距離を決定 */
+    const map = this._map, c = map.getCanvas();
+    const cx = c.offsetWidth/2, cy = c.offsetHeight/2, ref = 100;
+    const ll0 = map.unproject([cx, cy]);
+    const llE = map.unproject([cx+ref, cy]);
+    const llN = map.unproject([cx, cy-ref]);
+    const kmPxLon = haversineKm(ll0.lat, ll0.lng, ll0.lat, llE.lng) / ref;
+    const kmPxLat = haversineKm(ll0.lat, ll0.lng, llN.lat, ll0.lng) / ref;
     const targetKm = this._niceKm((kmPxLon + kmPxLat) / 2 * 80);
-
     const lonPx = Math.max(10, Math.round(targetKm / kmPxLon));
     const latPx = Math.max(10, Math.round(targetKm / kmPxLat));
-
-    this._L.style.width        = lonPx + 'px';
-    this._L.style.height       = latPx + 'px';
+    this._L.style.width = lonPx + 'px'; this._L.style.height = latPx + 'px';
     this._lonLabel.style.width = lonPx + 'px';
     this._latLabel.textContent = 'N-S ' + this._fmtKm(targetKm);
     this._lonLabel.textContent = 'E-W ' + this._fmtKm(targetKm);
   }
-});
+}
 
 function addDualScaleBar(map) {
-  new L.Control.DualScale().addTo(map);
+  map.addControl(new DualScaleControl(), 'bottom-left');
 }
 
 /* ─── 緯度経度グリッド（グラチキュール） ───────────────────── */
 function addGraticule(map) {
 
-  /* ズームに応じたグリッド間隔 (度) */
-  function gridStep(zoom) {
-    if (zoom >= 10) return 0.1;
-    if (zoom >=  9) return 0.5;
-    if (zoom >=  8) return 1;
-    if (zoom >=  6) return 2;
-    if (zoom >=  4) return 5;
-    return 10;
+  function gridStep(z) {
+    if (z >= 10) return 0.1; if (z >= 9) return 0.5; if (z >= 8) return 1;
+    if (z >= 6)  return 2;   if (z >= 4) return 5;   return 10;
   }
-
-  /* 表示ラベル整形 */
   function fmtLat(v) {
-    const abs = Math.abs(v);
-    return (abs % 1 === 0 ? abs.toFixed(0) : abs.toFixed(2)) + (v >= 0 ? '°N' : '°S');
+    const a = Math.abs(v);
+    return (a % 1 === 0 ? a.toFixed(0) : a.toFixed(2)) + (v >= 0 ? '°N' : '°S');
   }
   function fmtLon(v) {
-    const n   = ((v % 360) + 360) % 360;
-    const deg = n > 180 ? n - 360 : n;
-    const abs = Math.abs(deg);
-    return (abs % 1 === 0 ? abs.toFixed(0) : abs.toFixed(2)) + (deg >= 0 ? '°E' : '°W');
+    const n = ((v % 360) + 360) % 360, d = n > 180 ? n - 360 : n, a = Math.abs(d);
+    return (a % 1 === 0 ? a.toFixed(0) : a.toFixed(2)) + (d >= 0 ? '°E' : '°W');
+  }
+  function buildLines() {
+    const step = gridStep(map.getZoom()), features = [];
+    for (let lat = -90; lat <= 90; lat = +(lat+step).toFixed(9))
+      features.push({ type:'Feature', properties:{}, geometry:{ type:'LineString', coordinates:[[-180,lat],[180,lat]] } });
+    for (let lon = -180; lon <= 180; lon = +(lon+step).toFixed(9))
+      features.push({ type:'Feature', properties:{}, geometry:{ type:'LineString', coordinates:[[lon,-90],[lon,90]] } });
+    return { type:'FeatureCollection', features };
   }
 
-  /* DivIcon ファクトリ */
-  function makeIcon(html, cls, anchor, size) {
-    return L.divIcon({ className: cls, html, iconAnchor: anchor, iconSize: size || null });
-  }
+  /* ラベルは CSS クラスを流用した HTML オーバーレイ */
+  const labelDiv = document.createElement('div');
+  labelDiv.style.cssText = 'position:absolute;inset:0;pointer-events:none;overflow:hidden;';
+  map.getCanvasContainer().appendChild(labelDiv);
 
-  const lineOpt = {
-    color: 'rgba(100,160,220,0.18)',
-    weight: 1,
-    interactive: false
-  };
-
-  const gratLayer = L.layerGroup().addTo(map);
-
-  function redraw() {
-    gratLayer.clearLayers();
-
-    const vb   = map.getBounds();                   // 表示範囲（ラベル位置決め）
-    const db   = vb.pad(0.15);                      // グリッド線描画範囲（少し広め）
-    const zoom = map.getZoom();
-    const step = gridStep(zoom);
-
-    const latMin = Math.floor(db.getSouth() / step) * step;
-    const latMax = Math.ceil (db.getNorth() / step) * step;
-    const lonMin = Math.floor(db.getWest()  / step) * step;
-    const lonMax = Math.ceil (db.getEast()  / step) * step;
-
-    /* ── 緯度線（横線）+ 左端ラベル ── */
-    const labelLon = vb.getWest();
-    for (let lat = latMin; lat <= latMax + 1e-9; lat = +(lat + step).toFixed(9)) {
+  function buildLabels() {
+    labelDiv.innerHTML = '';
+    const b = map.getBounds(), step = gridStep(map.getZoom());
+    const latMin = Math.ceil(b.getSouth() / step) * step;
+    const latMax = Math.floor(b.getNorth() / step) * step;
+    const lonMin = Math.ceil(b.getWest()  / step) * step;
+    const lonMax = Math.floor(b.getEast() / step) * step;
+    for (let lat = latMin; lat <= latMax + 1e-9; lat = +(lat+step).toFixed(9)) {
       if (lat < -90 || lat > 90) continue;
-      L.polyline([[lat, lonMin], [lat, lonMax]], lineOpt).addTo(gratLayer);
-      if (lat >= vb.getSouth() && lat <= vb.getNorth()) {
-        L.marker([lat, labelLon], {
-          icon: makeIcon(fmtLat(lat), 'gr-label gr-lat-label', [-2, 8]),
-          interactive: false, zIndexOffset: -1000
-        }).addTo(gratLayer);
-      }
+      const {x, y} = map.project([b.getWest(), lat]);
+      const d = document.createElement('div');
+      d.className = 'gr-label gr-lat-label';
+      d.textContent = fmtLat(lat);
+      d.style.cssText = `position:absolute;left:${x+2}px;top:${y-8}px;`;
+      labelDiv.appendChild(d);
     }
-
-    /* ── 経度線（縦線）+ 下端ラベル ── */
-    const labelLat = vb.getSouth();
-    for (let lon = lonMin; lon <= lonMax + 1e-9; lon = +(lon + step).toFixed(9)) {
-      L.polyline([[latMin, lon], [latMax, lon]], lineOpt).addTo(gratLayer);
-      if (lon >= vb.getWest() && lon <= vb.getEast()) {
-        L.marker([labelLat, lon], {
-          icon: makeIcon(fmtLon(lon), 'gr-label gr-lon-label', [30, 14], [60, 14]),
-          interactive: false, zIndexOffset: -1000
-        }).addTo(gratLayer);
-      }
+    for (let lon = lonMin; lon <= lonMax + 1e-9; lon = +(lon+step).toFixed(9)) {
+      const {x, y} = map.project([lon, b.getSouth()]);
+      const d = document.createElement('div');
+      d.className = 'gr-label gr-lon-label';
+      d.textContent = fmtLon(lon);
+      d.style.cssText = `position:absolute;left:${x-30}px;top:${y+2}px;`;
+      labelDiv.appendChild(d);
     }
   }
 
-  map.on('zoomend moveend', redraw);
-  redraw();
-  return gratLayer;
+  map.addSource('graticule', { type:'geojson', data: buildLines() });
+  map.addLayer({ id:'graticule', type:'line', source:'graticule',
+    paint: { 'line-color':'rgba(100,160,220,0.18)', 'line-width':1 } });
+
+  function redraw() { map.getSource('graticule').setData(buildLines()); buildLabels(); }
+  map.on('zoomend', redraw);
+  map.on('moveend', buildLabels);
+  buildLabels();
 }
 
 function initMap() {
-  leafletMap = L.map('map', { zoomControl: true, preferCanvas: true }).setView([36, 138], 5);
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-    attribution: '©OpenStreetMap ©CARTO', maxZoom: 18
-  }).addTo(leafletMap);
-  addGraticule(leafletMap);              // グリッド（震源マーカーより下）
-  markerLayer = L.layerGroup().addTo(leafletMap);
-  addDualScaleBar(leafletMap);
+  leafletMap = new maplibregl.Map({
+    container: 'map',
+    style: {
+      version: 8,
+      sources: { carto: { type:'raster',
+        tiles: ['https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'],
+        tileSize: 256, attribution: '©OpenStreetMap ©CARTO' }},
+      layers: [{ id:'carto', type:'raster', source:'carto' }]
+    },
+    center: [138, 36],   // [lon, lat]
+    zoom: 5
+  });
+  leafletMap.addControl(new maplibregl.NavigationControl(), 'top-right');
+
+  leafletMap.on('load', () => {
+    addGraticule(leafletMap);
+
+    leafletMap.addSource('quakes', { type:'geojson',
+      data: { type:'FeatureCollection', features:[] } });
+    leafletMap.addLayer({
+      id: 'quakes', type: 'circle', source: 'quakes',
+      paint: {
+        'circle-radius': ['interpolate', ['linear'], ['get','mag'],
+          1, 3, 4, 6, 7, 14, 9, 20],
+        'circle-color':   ['get', 'color'],
+        'circle-opacity':  0.75,
+        'circle-stroke-color': 'rgba(0,0,0,0.3)',
+        'circle-stroke-width': 0.5
+      }
+    });
+
+    leafletMap.on('click', 'quakes', e => {
+      const p = e.features[0].properties;
+      new maplibregl.Popup({ maxWidth:'290px' })
+        .setLngLat(e.lngLat)
+        .setHTML(`<div style="font-family:monospace;font-size:12px;line-height:1.8">
+          ${p.datetime}<br>
+          <b>M${p.mag}</b><br>
+          ${p.place}<br>
+          ${p.lat_s}°, ${p.lon_s}°<br>
+          深さ ${p.depth} km<br>
+          <span style="opacity:0.6;font-size:0.9em">出典: ${p.source}</span>
+        </div>`)
+        .addTo(leafletMap);
+    });
+    leafletMap.on('mouseenter', 'quakes', () => { leafletMap.getCanvas().style.cursor = 'pointer'; });
+    leafletMap.on('mouseleave', 'quakes', () => { leafletMap.getCanvas().style.cursor = ''; });
+
+    addDualScaleBar(leafletMap);
+    mapLoaded = true;
+    if (filteredData.length) updateMap();
+  });
 }
 
 function depthColor(depth) {
@@ -1049,49 +1071,50 @@ function depthColor(depth) {
 }
 
 function updateMap() {
-  markerLayer.clearLayers();
+  if (!mapLoaded) return;   // load イベント待ち
   const total = filteredData.length;
 
-  // 件数が多い場合はM上位にダウンサンプリング（地図のDOM負荷対策）
+  // 件数が多い場合はM上位にダウンサンプリング（描画負荷対策）
   let mapData = filteredData;
   let sampled = false;
   if (total > MAP_MAX_MARKERS) {
-    // M降順でMAP_MAX_MARKERS件取得（重要な地震を優先表示）
     mapData = [...filteredData].sort((a,b) => b.mag - a.mag).slice(0, MAP_MAX_MARKERS);
     sampled = true;
   }
 
-  const renderer = L.canvas({ padding: 0.5 });
-  mapData.forEach(d => {
-    const r = Math.max(3, Math.min(20, (d.mag - 1) * 3.5));
-    const circle = L.circleMarker([d.lat, d.lon], {
-      radius: r, fillColor: depthColor(d.depth),
-      color: 'rgba(0,0,0,0.3)', weight: 0.5,
-      fillOpacity: 0.75, renderer
-    }).bindPopup(`
-      <div style="font-family:monospace;font-size:12px;color:var(--text);line-height:1.8">
-        ${d.dt.toLocaleString('ja-JP', {timeZone:'Asia/Tokyo'})}<br>
-        <b>M${d.mag != null ? d.mag.toFixed(1) : '—'}</b><br>
-        ${d.place || '—'}<br>
-        ${d.lat.toFixed(3)}°, ${d.lon.toFixed(3)}°<br>
-        深さ ${d.depth} km
-      </div>`);
-    markerLayer.addLayer(circle);
+  // GeoJSON に変換して一括更新（WebGL で高速描画）
+  leafletMap.getSource('quakes').setData({
+    type: 'FeatureCollection',
+    features: mapData.map(d => ({
+      type: 'Feature',
+      geometry: { type:'Point', coordinates:[d.lon, d.lat] },
+      properties: {
+        mag:      d.mag != null ? +d.mag.toFixed(1) : 0,
+        color:    depthColor(d.depth),
+        depth:    d.depth,
+        place:    d.place || '—',
+        lat_s:    d.lat.toFixed(3),
+        lon_s:    d.lon.toFixed(3),
+        source:   fmtSource(d.source),
+        datetime: d.dt.toLocaleString('ja-JP', {timeZone:'Asia/Tokyo'})
+      }
+    }))
   });
 
-  // サンプリング表示中の注記
+  // サンプリング注記
   const note = document.getElementById('map-sample-note');
   if (note) {
     note.textContent = sampled
-      ? `表示: M上位 ${MAP_MAX_MARKERS.toLocaleString()} 件 / 全 ${total.toLocaleString()} 件`
-      : '';
+      ? `表示: M上位 ${MAP_MAX_MARKERS.toLocaleString()} 件 / 全 ${total.toLocaleString()} 件` : '';
     note.style.display = sampled ? 'block' : 'none';
   }
 
   if (mapData.length) {
-    const _lats = mapData.map(d=>d.lat), _lons = mapData.map(d=>d.lon);
-    const _r = (a,b)=>a<b?a:b, _R = (a,b)=>a>b?a:b;
-    leafletMap.fitBounds([[_lats.reduce(_r), _lons.reduce(_r)],[_lats.reduce(_R), _lons.reduce(_R)]], { padding: [20,20] });
+    const lons = mapData.map(d=>d.lon), lats = mapData.map(d=>d.lat);
+    leafletMap.fitBounds(
+      [[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]],
+      { padding: 20 }
+    );
   }
 }
 
@@ -1108,10 +1131,10 @@ const chartDefaults = {
 };
 
 function makeChart(id, config) {
-  if (charts[id]) { charts[id].destroy(); charts[id] = null; }
+  if (charts[id]) { try { charts[id].destroy(); } catch {} charts[id] = null; }
   const canvas = document.getElementById(id);
   const existing = Chart.getChart(canvas);
-  if (existing) existing.destroy();
+  if (existing) { try { existing.destroy(); } catch {} }
   // responsive設定を強制
   config.options = config.options || {};
   config.options.responsive = true;
@@ -1584,7 +1607,8 @@ function magColor(m) {
 }
 
 function updateTable() {
-  const d = filteredData.slice().reverse().slice(0, 300);
+  const rowLimit = parseInt(document.getElementById('table-row-limit')?.value) || 300;
+  const d = filteredData.slice().reverse().slice(0, rowLimit);
   document.getElementById('table-count').textContent = `表示: ${d.length} / ${filteredData.length} 件`;
   const thead = document.getElementById('t-head');
   const tbody = document.getElementById('t-body');
@@ -1962,16 +1986,17 @@ async function loadFromDB() {
       fetchTable(makePayload(tableB, cmB)),
     ]);
 
-    const toEvents = rows => rows.map(row => ({
-      dt   : new Date(row.dt),
-      lat  : row.lat,
-      lon  : row.lon,
-      depth: row.depth,
-      mag  : row.mag,
-      place: row.place || '',
+    const toEvents = (rows, src) => rows.map(row => ({
+      dt    : new Date(row.dt),
+      lat   : row.lat,
+      lon   : row.lon,
+      depth : row.depth,
+      mag   : row.mag,
+      place : row.place || '',
+      source: src,
     })).filter(d => !isNaN(d.dt) && !isNaN(d.lat) && !isNaN(d.lon));
 
-    rawData = [...toEvents(rowsA), ...toEvents(rowsB)].sort((a, b) => a.dt - b.dt);
+    rawData = [...toEvents(rowsA, tableA), ...toEvents(rowsB, tableB)].sort((a, b) => a.dt - b.dt);
 
     // 直近期間は速報値で自動補完（共通ヘルパー）
     const { dbCount, jmaAddCount } = await applyJMASupplementDB(
@@ -2127,22 +2152,25 @@ async function reQueryDB() {
     return data.rows;
   };
 
+  let fetchOk = false;
+  let countMsg = '';
   try {
     const [rowsA, rowsB] = await Promise.all([
       fetchTable(payloadA),
       fetchTable(baseB),
     ]);
 
-    const toEvents = rows => rows.map(row => ({
-      dt   : new Date(row.dt),
-      lat  : row.lat,
-      lon  : row.lon,
-      depth: row.depth,
-      mag  : row.mag,
-      place: row.place || '',
+    const toEvents = (rows, src) => rows.map(row => ({
+      dt    : new Date(row.dt),
+      lat   : row.lat,
+      lon   : row.lon,
+      depth : row.depth,
+      mag   : row.mag,
+      place : row.place || '',
+      source: src,
     })).filter(d => !isNaN(d.dt) && !isNaN(d.lat) && !isNaN(d.lon));
 
-    rawData = [...toEvents(rowsA), ...toEvents(rowsB)].sort((a, b) => a.dt - b.dt);
+    rawData = [...toEvents(rowsA, payloadA.table), ...toEvents(rowsB, tableB)].sort((a, b) => a.dt - b.dt);
 
     // 直近期間は速報値で自動補完（共通ヘルパー）
     const { dbCount, jmaAddCount } = await applyJMASupplementDB(
@@ -2154,18 +2182,10 @@ async function reQueryDB() {
     // _lastVizQuery の期間部分も更新
     _lastVizQuery = { ...payloadA, _tableB: tableB };
 
-    filteredData = [...rawData];
-    initFilterDefaults();
-    updateAll();
-
-    const countMsg = jmaAddCount > 0
+    countMsg = jmaAddCount > 0
       ? `再取得完了: ${rawData.length.toLocaleString()} 件 (DB: ${dbCount.toLocaleString()} + 速報値補完: +${jmaAddCount.toLocaleString()})`
       : `再取得完了: ${rawData.length.toLocaleString()} 件 (${payloadA.table}: ${rowsA.length.toLocaleString()}, ${tableB}: ${rowsB.length.toLocaleString()})`;
-    notify(countMsg, 'success');
-
-    // サイドバーの期間フィルタも同期
-    if (dateFrom) document.getElementById('f-date-start').value = dateFrom;
-    if (dateTo)   document.getElementById('f-date-end').value   = dateTo;
+    fetchOk = true;
 
   } catch(e) {
     logBox.textContent = e.message;
@@ -2174,6 +2194,16 @@ async function reQueryDB() {
   } finally {
     btn.disabled = false;
     label.style.display = 'inline'; spinner.style.display = 'none';
+  }
+
+  // ネットワーク取得成功後にUI更新（try-catchの外で実行することでChart.jsエラーが通信エラーと混同されない）
+  if (fetchOk) {
+    filteredData = [...rawData];
+    initFilterDefaults();
+    updateAll();
+    notify(countMsg, 'success');
+    if (dateFrom) document.getElementById('f-date-start').value = dateFrom;
+    if (dateTo)   document.getElementById('f-date-end').value   = dateTo;
   }
 }
 
@@ -2253,6 +2283,14 @@ function jmaEventTimeMs(raw) {
   return new Date(iso).getTime();
 }
 
+// ① データ出典ラベル
+function fmtSource(src) {
+  if (!src) return '—';
+  if (src === 'jma-hypo') return '気象庁速報値震源';
+  if (src === 'csv')      return 'CSVファイル';
+  return src + '（DB）';
+}
+
 // ① 生イベント → viz 共通フォーマット変換（si は落とす）
 function jmaToVizFormat(events) {
   return events
@@ -2260,7 +2298,7 @@ function jmaToVizFormat(events) {
     .map(e => {
       const ms = jmaEventTimeMs(e.time);
       if (isNaN(ms)) return null;
-      return { dt: new Date(ms), lat: e.lat, lon: e.lon, depth: e.dep ?? 0, mag: e.mag, place: e.place };
+      return { dt: new Date(ms), lat: e.lat, lon: e.lon, depth: e.dep ?? 0, mag: e.mag, place: e.place, source: 'jma-hypo' };
     })
     .filter(Boolean);
 }

@@ -424,6 +424,22 @@
 
   <div class="tool-grid">
 
+    <!-- 強震・長周期統合モニタ -->
+    <a class="card card--cyan" href="web/realtime_jp.html">
+      <div class="card-tag">Live</div>
+      <div class="card-icon">
+        <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="20" cy="20" r="16" stroke="#00e5ff" stroke-width="1" stroke-dasharray="3 3" opacity="0.4"/>
+          <path d="M8 22 L14 22 L17 12 L20 28 L23 16 L26 22 L32 22" stroke="#00e5ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M6 30 Q10 26 14 30 Q18 34 22 30 Q26 26 30 30 Q34 26 38 30" stroke="#00e5ff" stroke-width="1" stroke-linecap="round" fill="none" opacity="0.5"/>
+        </svg>
+      </div>
+      <div class="card-title">日本周辺 地震モニタ</div>
+      <div class="card-desc">
+        強震モニタ＋長周期地震動モニタの統合ダッシュボード。EEW・上位5観測点・JST/UTC二重時計。切り替えスイッチで2つのモニタを即時切り替え。
+      </div>
+    </a>
+
     <!-- リアルタイム震度マップ -->
     <a class="card card--cyan" href="web/realtime_map.html">
       <div class="card-tag">Live</div>
@@ -557,6 +573,55 @@
       <div class="card-meta">
         <svg viewBox="0 0 12 12"><circle cx="6" cy="6" r="4" fill="#ff6e1f" opacity="0.8"/></svg>
         web/seismic_predict_result.html
+      </div>
+    </a>
+
+    <!-- 津波情報・験潮統合ビューア -->
+    <a class="card card--cyan" href="web/tsunami_jp.html">
+      <div class="card-tag">Live</div>
+      <div class="card-icon">
+        <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M2 30 Q6 20 10 26 Q14 32 18 22 Q22 12 26 20 Q30 28 34 18 Q36 14 38 16"
+                stroke="#00d4ff" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+          <path d="M2 34 Q6 26 10 30 Q14 34 18 28 Q22 22 26 26 Q30 30 38 24"
+                stroke="#00c49a" stroke-width="1.5" stroke-linecap="round" fill="none" stroke-dasharray="3 2"/>
+          <circle cx="30" cy="10" r="4" fill="none" stroke="#00d4ff" stroke-width="1.5"/>
+          <line x1="30" y1="4" x2="30" y2="2" stroke="#00d4ff" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="30" y1="18" x2="30" y2="16" stroke="#00d4ff" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="24" y1="10" x2="22" y2="10" stroke="#00d4ff" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="38" y1="10" x2="36" y2="10" stroke="#00d4ff" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div class="card-title">津波情報・験潮統合ビューア</div>
+      <div class="card-desc">
+        気象庁の津波警報・注意報を地図と警報リストで表示し、験潮（潮位波形）データを同一画面に統合。津波情報と観測潮位の両方を一覧できます。
+      </div>
+      <div class="card-meta">
+        <svg viewBox="0 0 12 12"><circle cx="6" cy="6" r="4" fill="#00d4ff" opacity="0.8"/></svg>
+        web/tsunami_jp.html
+      </div>
+    </a>
+
+    <!-- 津波情報ビューア -->
+    <a class="card card--cyan" href="web/tsunami_viewer.html">
+      <div class="card-tag">Live</div>
+      <div class="card-icon">
+        <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M2 30 Q6 20 10 26 Q14 32 18 22 Q22 12 26 20 Q30 28 34 18 Q36 14 38 16"
+            stroke="#00d4ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+          <path d="M2 36 Q8 30 14 34 Q20 38 26 32 Q32 26 38 30"
+            stroke="#00d4ff" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="0.5"/>
+          <circle cx="26" cy="20" r="3" fill="none" stroke="#00d4ff" stroke-width="1.5" opacity="0.7"/>
+          <line x1="26" y1="4" x2="26" y2="17" stroke="#00d4ff" stroke-width="1.2" opacity="0.5" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div class="card-title">Tsunami Viewer</div>
+      <div class="card-desc">
+        気象庁の津波警報・注意報をリアルタイム表示。大津波警報・津波警報・津波注意報の発表状況を色分けマップと地域リストで一覧。警報解除まで60秒ごとに自動更新します。
+      </div>
+      <div class="card-meta">
+        <svg viewBox="0 0 12 12"><circle cx="6" cy="6" r="4" fill="#00d4ff" opacity="0.8"/></svg>
+        web/tsunami_viewer.html
       </div>
     </a>
 

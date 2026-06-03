@@ -7,8 +7,8 @@
 <title>気象庁 速報値震源ビューア</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600&family=Share+Tech+Mono&family=Noto+Sans+JP:wght@300;400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <link rel="stylesheet" href="../css/quakeview.css">
 </head>
 <body class="hypo-page">
@@ -185,24 +185,71 @@ const MAG_RADIUS = m => {
 const pad = n => String(n).padStart(2,'0');
 
 // ── 状態 ────────────────────────────────────────────────────
-let allEvents = [];
-let sortKey   = 'time';
-let sortDir   = -1;
-let markers   = [];
+let allEvents   = [];
+let sortKey     = 'time';
+let sortDir     = -1;
+let shownEvents = [];
 let selectedIdx = -1;
+let mapReady    = false;
+let pendingRender = false;
+
+// ── 地図スタイル ─────────────────────────────────────────────
+const GSI_HILLSHADE_STYLE = {
+  version: 8,
+  sources: {
+    gsi: { type: 'raster',
+      tiles: ['https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png'],
+      tileSize: 256, attribution: '©国土地理院' },
+    hillshade: { type: 'raster',
+      tiles: ['https://cyberjapandata.gsi.go.jp/xyz/hillshademap/{z}/{x}/{y}.png'],
+      tileSize: 256 },
+  },
+  layers: [
+    { id: 'gsi',       type: 'raster', source: 'gsi' },
+    { id: 'hillshade', type: 'raster', source: 'hillshade',
+      paint: { 'raster-opacity': 0.3 } },
+  ]
+};
 
 // ── 地図初期化 ──────────────────────────────────────────────
-const map = L.map('map', { center:[36,137], zoom:5 });
-L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png', {
-  attribution:'<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">国土地理院</a>',
-  maxZoom:18,
-}).addTo(map);
-L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/hillshademap/{z}/{x}/{y}.png', {
-  opacity:0.3, maxZoom:16,
-}).addTo(map);
+const map = new maplibregl.Map({
+  container: 'map',
+  style: GSI_HILLSHADE_STYLE,
+  center: [137, 36],
+  zoom: 5,
+});
 
-const canvasRenderer = L.canvas({ padding: 0.5 });
-const markerPool = new Map();
+map.on('load', () => {
+  map.addSource('hypo', {
+    type: 'geojson',
+    data: { type: 'FeatureCollection', features: [] },
+  });
+  map.addLayer({
+    id: 'hypo',
+    type: 'circle',
+    source: 'hypo',
+    paint: {
+      'circle-radius':       ['get', 'radius'],
+      'circle-color':        ['get', 'color'],
+      'circle-opacity':      ['get', 'opacity'],
+      'circle-stroke-color': ['get', 'strokeColor'],
+      'circle-stroke-width': ['get', 'strokeWidth'],
+    },
+  });
+  map.on('click', 'hypo', e => {
+    if (!e.features || !e.features.length) return;
+    const p = e.features[0].properties;
+    new maplibregl.Popup({ maxWidth: '240px' })
+      .setLngLat(e.lngLat)
+      .setHTML(p.popupHtml)
+      .addTo(map);
+    if (p.idx !== undefined) highlightRow(p.idx);
+  });
+  map.on('mouseenter', 'hypo', () => { map.getCanvas().style.cursor = 'pointer'; });
+  map.on('mouseleave', 'hypo', () => { map.getCanvas().style.cursor = ''; });
+  mapReady = true;
+  if (pendingRender) { pendingRender = false; _flushMarkers(); }
+});
 
 function eventKey(e) {
   return `${e.time}|${e.lat}|${e.lon}|${e.dep}|${e.mag}`;
@@ -361,72 +408,60 @@ function render() {
   document.getElementById('count-info').innerHTML =
     `<b>${shown.length}</b> / ${evs.length} 件 (全 ${allEvents.length} 件)`;
   document.getElementById('table-count').textContent = shown.length + ' 件';
-  renderMarkers(shown);
+  shownEvents = shown;
+  _flushMarkersOrDefer();
   renderTable(shown);
 }
 
-// ── 地図マーカー ────────────────────────────────────────────
-function createMarkerForEvent(e) {
-  const color  = DEP_COLOR(e.dep);
-  const radius = MAG_RADIUS(e.mag);
-  const isFelt = e.si !== null && e.si in SI_LABEL;
-  const m = L.circleMarker([e.lat, e.lon], {
-    renderer: canvasRenderer,
-    radius,
-    color:       isFelt ? '#333' : color,
-    weight:      isFelt ? 1.2 : 0.5,
-    opacity:     0.9,
-    fillColor:   color,
-    fillOpacity: isFelt ? 0.9 : 0.6,
-  }).addTo(map);
-  const siStr = e.si ? (SI_LABEL[e.si] || e.si) : '無感';
-  const siCls = e.si ? (SI_CLASS[e.si] || 'si-5') : 'si-none';
-  const mc    = magClass(e.mag);
-  const mjStr = e.mj ? (MJ_LABEL[e.mj] || e.mj) : '';
-  const extra = [e.aflag ? `aflag:${e.aflag}` : '', e.flag ? `flag:${e.flag}` : ''].filter(Boolean).join(' ');
-  m.bindPopup(`
-    <div class="popup-time">${fmtTime(e.time)}</div>
-    <div class="popup-place">${e.place || '---'}</div>
-    <div class="popup-row">
-      <span class="mag ${mc}">${e.mag !== null ? e.mag.toFixed(1) : '---'}${mjStr ? ' <small style="font-weight:300;font-size:9px">'+mjStr+'</small>' : ''}</span>
-      <span class="si ${siCls}">${siStr}</span>
-      <span class="popup-dep">深さ ${e.dep !== null ? e.dep+'km' : '---'}</span>
-    </div>
-    ${extra ? `<div style="margin-top:5px;font-family:var(--mono);font-size:10px;color:#5a8099">${extra}</div>` : ''}
-  `, { maxWidth:220 });
-  return m;
+// ── 地図マーカー（GeoJSON source 更新） ─────────────────────
+function _flushMarkersOrDefer() {
+  if (!mapReady) { pendingRender = true; return; }
+  _flushMarkers();
+}
+
+function _flushMarkers() {
+  const features = [];
+  shownEvents.forEach((e, idx) => {
+    if (e.lat === null || e.lon === null) return;
+    const color   = DEP_COLOR(e.dep);
+    const radius  = MAG_RADIUS(e.mag);
+    const isFelt  = e.si !== null && e.si in SI_LABEL;
+    const siStr   = e.si ? (SI_LABEL[e.si] || e.si) : '無感';
+    const siCls   = e.si ? (SI_CLASS[e.si] || 'si-5') : 'si-none';
+    const mc      = magClass(e.mag);
+    const mjStr   = e.mj ? (MJ_LABEL[e.mj] || e.mj) : '';
+    const extra   = [e.aflag ? `aflag:${e.aflag}` : '', e.flag ? `flag:${e.flag}` : ''].filter(Boolean).join(' ');
+    const popupHtml =
+      `<div class="popup-time">${fmtTime(e.time)}</div>` +
+      `<div class="popup-place">${e.place || '---'}</div>` +
+      `<div class="popup-row">` +
+        `<span class="mag ${mc}">${e.mag !== null ? e.mag.toFixed(1) : '---'}${mjStr ? ` <small style="font-weight:300;font-size:9px">${mjStr}</small>` : ''}</span>` +
+        `<span class="si ${siCls}">${siStr}</span>` +
+        `<span class="popup-dep">深さ ${e.dep !== null ? e.dep + 'km' : '---'}</span>` +
+      `</div>` +
+      (extra ? `<div style="margin-top:5px;font-family:var(--mono);font-size:10px;color:#5a8099">${extra}</div>` : '');
+
+    features.push({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [e.lon, e.lat] },
+      properties: {
+        idx,
+        color,
+        radius,
+        opacity:     isFelt ? 0.9 : 0.75,
+        strokeColor: isFelt ? '#333333' : 'rgba(0,0,0,0.3)',
+        strokeWidth: isFelt ? 1.2 : 0.5,
+        popupHtml,
+      },
+    });
+  });
+  features.reverse(); // 古いイベントが後ろに来るよう逆転
+  map.getSource('hypo').setData({ type: 'FeatureCollection', features });
 }
 
 function clearMarkers() {
-  for (const m of markerPool.values()) map.removeLayer(m);
-  markerPool.clear();
-  markers = [];
-}
-
-function renderMarkers(evs) {
-  const neededKeys = new Set(evs.filter(e => e.lat !== null && e.lon !== null).map(eventKey));
-
-  for (const [k, m] of [...markerPool.entries()]) {
-    if (!neededKeys.has(k)) {
-      map.removeLayer(m);
-      markerPool.delete(k);
-    }
-  }
-
-  markers = [];
-  [...evs].reverse().forEach((e, ri) => {
-    const idx = evs.length - 1 - ri;
-    if (e.lat === null || e.lon === null) return;
-    const k = eventKey(e);
-    let m = markerPool.get(k);
-    if (!m) {
-      m = createMarkerForEvent(e);
-      markerPool.set(k, m);
-    }
-    m.off('click');
-    m.on('click', () => highlightRow(idx));
-    markers.push(m);
-  });
+  if (mapReady) map.getSource('hypo').setData({ type: 'FeatureCollection', features: [] });
+  shownEvents = [];
 }
 
 // ── テーブル ────────────────────────────────────────────────
@@ -451,9 +486,7 @@ function renderTable(evs) {
     `;
     tr.onclick = () => {
       if (e.lat !== null && e.lon !== null) {
-        map.setView([e.lat, e.lon], Math.max(map.getZoom(), 7), { animate:true });
-        const mi = evs.length - 1 - idx;
-        if (markers[mi]) markers[mi].openPopup();
+        map.flyTo({ center: [e.lon, e.lat], zoom: Math.max(map.getZoom(), 7) });
       }
       highlightRow(idx);
     };
@@ -502,8 +535,8 @@ function toggleTablePane() {
     btn.textContent = '◀';
     btn.title = 'リストを折りたたむ';
   }
-  // Leaflet地図サイズを再計算
-  setTimeout(() => map.invalidateSize(), 260);
+  // MapLibre 地図サイズを再計算
+  setTimeout(() => map.resize(), 260);
 }
 
 // ── ソート ──────────────────────────────────────────────────
@@ -529,7 +562,7 @@ document.addEventListener('mousemove', e => {
   if (!isResizing) return;
   const rect = document.getElementById('main').getBoundingClientRect();
   document.getElementById('table-pane').style.width = Math.max(280, Math.min(700, rect.right - e.clientX)) + 'px';
-  map.invalidateSize();
+  map.resize();
 });
 document.addEventListener('mouseup', () => { isResizing = false; });
 

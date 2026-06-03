@@ -7,9 +7,9 @@
   <title>震度分布予測 AI</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600&family=Noto+Sans+JP:wght@300;400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
   <link rel="stylesheet" href="../css/quakeview.css">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 </head>
 <body class="rtm-body">
 
@@ -186,41 +186,80 @@ function renderDetail(el, station) {
       `<span class="rtm-detail-si">${fmt2(station.lon)} °E</span></div>`;
 }
 
-function renderEpicenter(layer, meta) {
-  const icon = L.divIcon({
-    html: '<span class="pred-epicenter">★</span>',
-    className: '', iconAnchor: [11, 11],
-  });
-  L.marker([meta.lat, meta.lon], { icon, interactive: false })
-    .addTo(layer)
-    .bindTooltip(`震源 M${fmt1(meta.mag)} 深さ${meta.depth}km`, { direction: 'top', offset: [0, -8] });
+function renderEpicenter(mapInst, meta) {
+  const el = document.createElement('div');
+  el.innerHTML = '<span class="pred-epicenter">★</span>';
+  el.style.cssText = 'pointer-events:none;';
+  const popup = new maplibregl.Popup({ offset: [0, -14], closeButton: false })
+    .setHTML(`震源 M${fmt1(meta.mag)} 深さ${meta.depth}km`);
+  new maplibregl.Marker({ element: el, anchor: 'center' })
+    .setLngLat([meta.lon, meta.lat])
+    .setPopup(popup)
+    .addTo(mapInst);
 }
 
-function renderStations(layer, stations, onSelect, renderer) {
-  for (const st of stations) {
-    const color  = intensityToColor(st.intensity);
-    const radius = intensityToRadius(st.intensity);
-    const m = L.circleMarker([st.lat, st.lon], {
-      renderer,
-      radius,
-      weight:      st.intensity >= 0.5 ? 0.5 : 0.3,
-      color:       st.intensity >= 0.5 ? '#111' : '#333',
-      fillColor:   color,
-      fillOpacity: st.intensity >= 0.5 ? 0.90 : 0.55,
-    }).addTo(layer);
+function renderStations(mapInst, stations, onSelect) {
+  // 震度順にソート（高震度を後に追加 → 前面表示）
+  const sorted = [...stations].sort((a, b) => a.intensity - b.intensity);
 
-    const tip = L.tooltip({ direction: 'top', offset: [0, -4] });
-    m.on('mouseover', () => {
-      tip.setContent(`<b>${st.id}</b><br>計測震度 ${fmt2(st.intensity)}`);
-      m.bindTooltip(tip).openTooltip();
-    });
-    m.on('mouseout',  () => m.unbindTooltip());
-    m.on('click', () => onSelect(st));
+  const features = sorted.map(st => ({
+    type: 'Feature',
+    geometry: { type: 'Point', coordinates: [st.lon, st.lat] },
+    properties: {
+      id:          st.id,
+      intensity:   st.intensity,
+      lat:         st.lat,
+      lon:         st.lon,
+      color:       intensityToColor(st.intensity),
+      radius:      intensityToRadius(st.intensity),
+      strokeColor: st.intensity >= 0.5 ? '#111' : '#333',
+      fillOpacity: st.intensity >= 0.5 ? 0.90 : 0.55,
+    },
+  }));
+
+  if (mapInst.getSource('pred-stations')) {
+    mapInst.getSource('pred-stations').setData({ type: 'FeatureCollection', features });
+    return;
   }
-  // 高震度を前面に
-  [...stations]
-    .sort((a, b) => a.intensity - b.intensity)
-    .forEach(st => {/* bringToFront は circleMarker ではキャッシュ不要 */});
+
+  mapInst.addSource('pred-stations', {
+    type: 'geojson',
+    data: { type: 'FeatureCollection', features },
+  });
+  mapInst.addLayer({
+    id: 'pred-stations',
+    type: 'circle',
+    source: 'pred-stations',
+    paint: {
+      'circle-radius':        ['get', 'radius'],
+      'circle-color':         ['get', 'color'],
+      'circle-opacity':       ['get', 'fillOpacity'],
+      'circle-stroke-color':  ['get', 'strokeColor'],
+      'circle-stroke-width':  0.5,
+    },
+  });
+
+  // ホバー時ポップアップ
+  let hoverPopup = null;
+  mapInst.on('mouseenter', 'pred-stations', e => {
+    mapInst.getCanvas().style.cursor = 'pointer';
+    const props = e.features[0].properties;
+    const coords = e.features[0].geometry.coordinates;
+    if (hoverPopup) hoverPopup.remove();
+    hoverPopup = new maplibregl.Popup({ closeButton: false, offset: [0, -4] })
+      .setLngLat(coords)
+      .setHTML(`<b>${props.id}</b><br>計測震度 ${fmt2(props.intensity)}`)
+      .addTo(mapInst);
+  });
+  mapInst.on('mouseleave', 'pred-stations', () => {
+    mapInst.getCanvas().style.cursor = '';
+    if (hoverPopup) { hoverPopup.remove(); hoverPopup = null; }
+  });
+
+  mapInst.on('click', 'pred-stations', e => {
+    const props = e.features[0].properties;
+    onSelect({ id: props.id, intensity: props.intensity, lat: props.lat, lon: props.lon });
+  });
 }
 
 
@@ -240,24 +279,46 @@ function collectEls(root = document) {
   };
 }
 
-/** Leaflet マップを初期化し、データを受け取って再描画できる viewer を返す */
+/** MapLibre マップを初期化し、データを受け取って再描画できる viewer を返す */
 function initViewer(mapEl, detailEl) {
-  const mapInst        = L.map(mapEl, { center: [36.5, 136.0], zoom: 5 });
-  const renderer       = L.canvas({ padding: 0.5 });
-  const markersLayer   = L.layerGroup().addTo(mapInst);
-  const epicenterLayer = L.layerGroup().addTo(mapInst);
+  const CARTO_STYLE = {
+    version: 8,
+    sources: { carto: {
+      type: 'raster',
+      tiles: ['https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'],
+      tileSize: 256,
+      attribution: '&copy; OpenStreetMap &copy; CARTO',
+    }},
+    layers: [{ id: 'carto', type: 'raster', source: 'carto' }],
+  };
 
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-    attribution: '&copy; OpenStreetMap &copy; CARTO', maxZoom: 18,
-  }).addTo(mapInst);
+  const mapInst = new maplibregl.Map({
+    container: mapEl,
+    style: CARTO_STYLE,
+    center: [136.0, 36.5],
+    zoom: 5,
+  });
+  mapInst.addControl(new maplibregl.NavigationControl(), 'top-right');
+
+  // 震源マーカーはカスタム DOM 要素なので配列で管理
+  let epicenterMarkers = [];
 
   function render(data) {
-    markersLayer.clearLayers();
-    epicenterLayer.clearLayers();
     renderDetail(detailEl, null);
-    renderEpicenter(epicenterLayer, data.meta);
-    renderStations(markersLayer, data.stations,
-      st => renderDetail(detailEl, st), renderer);
+    // 既存震源マーカーを削除
+    epicenterMarkers.forEach(m => m.remove());
+    epicenterMarkers = [];
+
+    const doRender = () => {
+      renderEpicenter(mapInst, data.meta);
+      renderStations(mapInst, data.stations, st => renderDetail(detailEl, st));
+    };
+
+    if (mapInst.isStyleLoaded()) {
+      doRender();
+    } else {
+      mapInst.once('load', doRender);
+    }
   }
 
   return { render };

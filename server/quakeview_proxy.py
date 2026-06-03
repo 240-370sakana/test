@@ -5,6 +5,7 @@ ETAS解析 + DB API + 強震モニタ(リアルタイム震度) 統合版
 """
 
 import datetime
+import sqlite3
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, unquote
 import urllib.request, urllib.error, ssl, os, sys, threading, webbrowser
@@ -15,6 +16,7 @@ import socket
 import io
 import csv
 import logging
+import re
 from pathlib import Path
 
 # 追加ライブラリのチェック
@@ -24,7 +26,7 @@ try:
     import requests
 except ImportError:
     print("エラー: 必要なライブラリが不足しています。以下を実行してください:")
-    print("pip install numpy pillow requests mysql-connector-python")
+    print("pip install numpy pillow requests")
     sys.exit(1)
 
 PORT = 8765
@@ -189,17 +191,15 @@ def _read_db_config() -> configparser.ConfigParser:
     cfg.read(path, encoding='utf-8')
     return cfg
 
-def _get_conn(cfg: configparser.ConfigParser):
-    import mysql.connector
-    sec = cfg['mysql']
-    return mysql.connector.connect(
-        host     = sec.get('host', 'localhost'),
-        port     = int(sec.get('port', 3306)),
-        user     = sec['user'],
-        password = sec['password'],
-        database = sec['database'],
-        charset  = 'utf8mb4',
-    )
+def _get_db_path() -> str:
+    cfg = _read_db_config()
+    rel = cfg['sqlite'].get('database', 'data/hypolist.db')
+    return os.path.join(PROJECT_ROOT, rel)
+
+def _get_conn():
+    db_path = _get_db_path()
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    return sqlite3.connect(db_path)
 
 # =============================================================================
 #  Discord EEW 通知（強震モニタ）
@@ -246,6 +246,49 @@ def _send_discord_shindo(content: str):
         print(f"[Discord] 強震通知送信: {content.splitlines()[0]}")
     except Exception as e:
         print(f"[Discord] 強震通知送信エラー: {e}")
+
+def _send_discord_quake_event(ev: dict) -> bool:
+    """Elapsed Timer の新規地震イベントを Discord に通知する"""
+    url = _discord_cfg.get("webhook_url")
+    if not url:
+        return False
+    try:
+        mag     = ev.get("mag")
+        mag_type = ev.get("magType", "M")
+        mags    = ev.get("mags") or []
+        lat     = float(ev.get("lat", 0))
+        lon     = float(ev.get("lon", 0))
+        depth   = float(ev.get("depth", 0))
+        ot_str  = ev.get("ot", "")
+        region  = ev.get("region") or "不明"
+
+        mag_str  = f"{mag_type}{mag:.1f}" if mag is not None else "M?"
+        mags_str = " / ".join(f"{m['type']} {m['val']:.1f}" for m in mags) if len(mags) > 1 else mag_str
+        color    = 0xff6b35 if mag and mag >= 7 else 0xffd166 if mag and mag >= 6 else 0x00d4ff
+        lat_str  = f"{'N' if lat >= 0 else 'S'}{abs(lat):.3f}°"
+        lon_str  = f"{'E' if lon >= 0 else 'W'}{abs(lon):.3f}°"
+
+        payload = {
+            "embeds": [{
+                "title": "🌍 新規地震イベント検出",
+                "color": color,
+                "fields": [
+                    {"name": "マグニチュード",  "value": mags_str,               "inline": True},
+                    {"name": "発生時刻 (JST)", "value": ot_str,                  "inline": True},
+                    {"name": "地域",           "value": region,                  "inline": False},
+                    {"name": "座標",           "value": f"{lat_str}  {lon_str}", "inline": True},
+                    {"name": "深さ",           "value": f"{depth:.0f} km",       "inline": True},
+                ],
+                "footer":    {"text": "QuakeView — Elapsed Timer"},
+                "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+            }]
+        }
+        requests.post(url, json=payload, timeout=5)
+        print(f"[Discord] quake event 通知: {region} {mag_str}")
+        return True
+    except Exception as e:
+        print(f"[Discord] quake event 送信エラー: {e}")
+        return False
 
 def _send_discord_eew(eew: dict):
     url = _discord_cfg.get("webhook_url")
@@ -347,6 +390,64 @@ JMA_FEED_URL      = "https://www.data.jma.go.jp/developer/xml/feed/eqvol.xml"
 JMA_FEED_INTERVAL = 60.0
 _ATOM_NS          = "http://www.w3.org/2005/Atom"
 _JMA_NS           = "http://xml.kishou.go.jp/jmaxml1/"
+
+# =============================================================================
+#  VTSE41 津波警報・注意報・予報 XMLパーサー
+# =============================================================================
+
+def _vtse_grade(kind_code: str) -> str:
+    """JMA津波電文 Category/Kind/Code → フロントエンド grade キー"""
+    if kind_code in ('51', '52', '53'):
+        return 'MajorWarning'   # 大津波警報
+    if kind_code == '61':
+        return 'Warning'        # 津波警報
+    if kind_code == '62':
+        return 'Watch'          # 津波注意報
+    return 'None'               # 71=予報（若干の海面変動）, 00=なし
+
+def _parse_vtse41(xml_bytes: bytes) -> dict:
+    """VTSE41（津波警報・注意報・予報）XMLを解析して正規化JSONを返す"""
+    root = ET.fromstring(xml_bytes)
+
+    rdt_el       = _xml_find(root, 'Head', 'ReportDateTime')
+    info_type_el = _xml_find(root, 'Head', 'InfoType')
+    rdt       = rdt_el.text.strip()       if rdt_el is not None       and rdt_el.text       else None
+    info_type = info_type_el.text.strip() if info_type_el is not None and info_type_el.text else ''
+
+    areas = []
+    forecast = _xml_find(root, 'Body', 'Tsunami', 'Forecast')
+    if forecast is not None:
+        for item in _xml_findall(forecast, 'Item'):
+            area_el = _xml_find(item, 'Area')
+            if area_el is None:
+                continue
+            name_el = _xml_find(area_el, 'Name')
+            code_el = _xml_find(area_el, 'Code')
+            name    = name_el.text.strip() if name_el is not None and name_el.text else ''
+            code    = code_el.text.strip() if code_el is not None and code_el.text else ''
+
+            kind_code_el = _xml_find(item, 'Category', 'Kind', 'Code')
+            kind_code    = kind_code_el.text.strip() if kind_code_el is not None and kind_code_el.text else '00'
+
+            fh_el     = _xml_find(item, 'FirstHeight')
+            arrival   = None
+            condition = ''
+            if fh_el is not None:
+                arr_el  = _xml_find(fh_el, 'ArrivalTime')
+                cond_el = _xml_find(fh_el, 'Condition')
+                arrival   = arr_el.text.strip()  if arr_el  is not None and arr_el.text  else None
+                condition = cond_el.text.strip() if cond_el is not None and cond_el.text else ''
+
+            th_el       = _xml_find(item, 'MaxHeight', 'TsunamiHeight')
+            height_desc = th_el.get('description', '') if th_el is not None else ''
+
+            areas.append({
+                'code': code, 'name': name, 'grade': _vtse_grade(kind_code),
+                'maxHeight':   {'description': height_desc},
+                'firstHeight': {'arrivalTime': arrival, 'condition': condition},
+            })
+
+    return {'rdt': rdt, 'infoType': info_type, 'areas': areas}
 
 _jma_seen_ids = set()
 _jma_id_lock  = threading.Lock()
@@ -528,6 +629,16 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, _stations)
             return
 
+        # 津波情報 API（JMA XML フィード → VTSE41 解析）
+        if url_path == '/api/tsunami':
+            self._handle_tsunami()
+            return
+
+        # 海保潮位スクレイピング API
+        if url_path == '/api/tide/jcg':
+            self._handle_jcg_tide(params)
+            return
+
         # DB情報 API
         if url_path == '/api/db/info':
             self._handle_db_info()
@@ -561,6 +672,8 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_viz_query(params)
         elif url_path == '/api/notify':
             self._handle_shindo_notify(params)
+        elif url_path == '/api/notify/quake':
+            self._handle_quake_notify(params)
         elif url_path == '/api/predict':
             self._handle_predict(params)
         else:
@@ -591,16 +704,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def _handle_db_info(self):
         try:
-            cfg = _read_db_config(); conn = _get_conn(cfg); cur = conn.cursor()
-            cur.execute('SHOW TABLES')
+            conn = _get_conn(); cur = conn.cursor()
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
             tables = [row[0] for row in cur.fetchall()]
             result = []
             for tbl in tables:
-                cur.execute(f'SHOW COLUMNS FROM `{tbl}`')
-                cols = [{'name': r[0], 'type': r[1]} for r in cur.fetchall()]
-                cur.execute(f'SELECT TABLE_ROWS FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=%s', (tbl,))
-                r = cur.fetchone()
-                result.append({'name': tbl, 'rows': int(r[0]) if r else 0, 'columns': cols})
+                cur.execute(f'PRAGMA table_info("{tbl}")')
+                cols = [{'name': r[1], 'type': r[2]} for r in cur.fetchall()]
+                cur.execute(f'SELECT COUNT(*) FROM "{tbl}"')
+                count = cur.fetchone()[0]
+                result.append({'name': tbl, 'rows': count, 'columns': cols})
             cur.close(); conn.close()
             self._send_json(200, {'tables': result})
         except Exception as e: self._send_json(500, {'error': str(e)})
@@ -620,16 +733,16 @@ class Handler(BaseHTTPRequestHandler):
                 with open(csv_path, 'w', encoding='utf-8') as f: f.write(inline_csv)
             else:
                 table = params.get('table','')
-                cfg = _read_db_config(); conn = _get_conn(cfg); cur = conn.cursor()
-                sql = f"SELECT `{col_dt}`, `{col_mag}` FROM `{table}` ORDER BY `{col_dt}` ASC"
+                conn = _get_conn(); cur = conn.cursor()
+                sql = f'SELECT "{col_dt}", "{col_mag}" FROM "{table}" ORDER BY "{col_dt}" ASC'
                 cur.execute(sql); rows = cur.fetchall()
                 with open(csv_path, 'w', encoding='utf-8') as f:
                     f.write(f"{col_dt},{col_mag}\n")
                     for r in rows: f.write(f"{r[0]},{r[1]}\n")
                 cur.close(); conn.close()
 
-            etas_script = os.path.join(PROJECT_ROOT, 'analysis', 'etas_analysis.py')
-            cmd = [sys.executable, etas_script, csv_path, '--output', json_path, '--datetime', col_dt, '--mag', col_mag]
+            etas_script = os.path.join(PROJECT_ROOT, 'py', 'tools.py')
+            cmd = [sys.executable, etas_script, 'etas', csv_path, '--output', json_path, '--datetime', col_dt, '--mag', col_mag]
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
             with open(json_path, 'r', encoding='utf-8') as f: output = _json.load(f)
             self._send_json(200, output)
@@ -658,34 +771,33 @@ class Handler(BaseHTTPRequestHandler):
             if not table or not col_dt or not col_mag or not col_lat or not col_lon or not col_depth:
                 return self._send_json(400, {'error': 'Missing required parameters'})
 
-            cfg = _read_db_config()
-            conn = _get_conn(cfg)
+            conn = _get_conn()
             cur = conn.cursor()
 
             # SELECT 句：必須列 + 任意の震源地列
-            place_col = f", `{col_place}`" if col_place else ""
+            place_col = f', "{col_place}"' if col_place else ""
             sql = (
-                f"SELECT `{col_dt}`, `{col_mag}`, `{col_lat}`, `{col_lon}`, `{col_depth}`{place_col}"
-                f" FROM `{table}` WHERE 1=1"
+                f'SELECT "{col_dt}", "{col_mag}", "{col_lat}", "{col_lon}", "{col_depth}"{place_col}'
+                f' FROM "{table}" WHERE 1=1'
             )
             args = []
 
             if date_from:
-                sql += f" AND `{col_dt}` >= %s"
+                sql += f' AND "{col_dt}" >= ?'
                 args.append(date_from)
             if date_to:
-                sql += f" AND `{col_dt}` <= %s"
+                sql += f' AND "{col_dt}" <= ?'
                 args.append(date_to + ' 23:59:59')
             if lat_min is not None:
-                sql += f" AND `{col_lat}` >= %s"; args.append(float(lat_min))
+                sql += f' AND "{col_lat}" >= ?'; args.append(float(lat_min))
             if lat_max is not None:
-                sql += f" AND `{col_lat}` <= %s"; args.append(float(lat_max))
+                sql += f' AND "{col_lat}" <= ?'; args.append(float(lat_max))
             if lon_min is not None:
-                sql += f" AND `{col_lon}` >= %s"; args.append(float(lon_min))
+                sql += f' AND "{col_lon}" >= ?'; args.append(float(lon_min))
             if lon_max is not None:
-                sql += f" AND `{col_lon}` <= %s"; args.append(float(lon_max))
+                sql += f' AND "{col_lon}" <= ?'; args.append(float(lon_max))
 
-            sql += f" ORDER BY `{col_dt}` ASC"
+            sql += f' ORDER BY "{col_dt}" ASC'
             if limit > 0:
                 sql += f" LIMIT {int(limit)}"
 
@@ -698,13 +810,17 @@ class Handler(BaseHTTPRequestHandler):
             result = []
             for r in db_rows:
                 dt_val = r[0]
-                # datetime オブジェクト → ISO文字列（JSの new Date() が確実にパースできる形式）
+                # datetime オブジェクト / 文字列 → ISO 8601形式
+                # （JSの new Date() が確実にパースできるよう T区切りに統一）
                 if isinstance(dt_val, datetime.datetime):
                     dt_str = dt_val.strftime('%Y-%m-%dT%H:%M:%S')
                 elif isinstance(dt_val, datetime.date):
-                    dt_str = dt_val.strftime('%Y-%m-%dT%H:%M:%S')  # 時刻なし→00:00:00
+                    dt_str = dt_val.strftime('%Y-%m-%dT%H:%M:%S')
+                elif dt_val:
+                    # SQLite TEXT: "2026-03-07 00:00:16.01" → "2026-03-07T00:00:16"
+                    dt_str = str(dt_val).replace(' ', 'T')[:19]
                 else:
-                    dt_str = str(dt_val)
+                    dt_str = None
 
                 row_dict = {
                     'dt'   : dt_str,
@@ -745,6 +861,14 @@ class Handler(BaseHTTPRequestHandler):
         _send_discord_shindo(content.strip())
         self._send_json(200, {'ok': True})
 
+    def _handle_quake_notify(self, params: dict):
+        """POST /api/notify/quake — Elapsed Timer 新規地震イベント → Discord 転送"""
+        ok = _send_discord_quake_event(params)
+        if ok:
+            self._send_json(200, {'ok': True})
+        else:
+            self._send_json(503, {'error': 'webhook未設定または送信失敗'})
+
     def _handle_predict(self, params: dict):
         """POST /api/predict — 震度分布予測AIを実行してJSONを返す"""
         try:
@@ -756,16 +880,14 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(400, {'error': f'パラメータ不正: {e}'})
             return
 
-        predict_script = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'predict.py'
-        )
+        predict_script = os.path.join(PROJECT_ROOT, 'py', 'tools.py')
         if not os.path.exists(predict_script):
-            self._send_json(500, {'error': f'predict.py が見つかりません: {predict_script}'})
+            self._send_json(500, {'error': f'tools.py が見つかりません: {predict_script}'})
             return
 
         try:
             proc = subprocess.run(
-                [sys.executable, predict_script,
+                [sys.executable, predict_script, 'predict',
                  '--lat',   str(lat),
                  '--lon',   str(lon),
                  '--depth', str(depth),
@@ -783,6 +905,156 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._send_json(500, {'error': str(e)})
 
+    def _handle_tsunami(self):
+        """GET /api/tsunami — JMA XML フィードから最新の津波警報情報を返す"""
+        try:
+            feed_data = _fetch_xml(JMA_FEED_URL)
+            feed_root = ET.fromstring(feed_data)
+
+            latest_url = None
+            for entry in feed_root.findall(f"{{{_ATOM_NS}}}entry"):
+                title_el = entry.find(f"{{{_ATOM_NS}}}title")
+                if title_el is None or title_el.text != '津波警報・注意報・予報':
+                    continue
+                link_el = entry.find(f"{{{_ATOM_NS}}}link")
+                if link_el is not None:
+                    href = link_el.get('href', '')
+                    if href:
+                        latest_url = href
+                        break
+
+            if not latest_url:
+                self._send_json(200, {'rdt': None, 'infoType': '解除', 'areas': []})
+                return
+
+            xml_bytes = _fetch_xml(latest_url)
+            result    = _parse_vtse41(xml_bytes)
+            self._send_json(200, result)
+        except Exception as e:
+            self._send_json(500, {'error': str(e)})
+
+    def _handle_jcg_tide(self, params: dict):
+        """
+        GET /api/tide/jcg?station=0016[&date=20260601]
+        海上保安庁 潮位観測ページをスクレイピングして JSON を返す。
+        出典：海上保安庁ホームページ (https://www1.kaiho.mlit.go.jp/TIDE/gauge/)
+        データを加工（整形・Canvas グラフ描画）して表示。
+        """
+        station = params.get('station', [''])[0].strip()
+        date    = params.get('date',    [''])[0].strip()
+
+        if not re.match(r'^\d{4}$', station):
+            self._send_json(400, {'error': 'station は4桁の数字で指定してください'})
+            return
+
+        gauge_url = f'https://www1.kaiho.mlit.go.jp/TIDE/gauge/gauge.php?s={station}'
+
+        try:
+            if date and re.match(r'^\d{8}$', date):
+                # POST で特定日付を取得
+                from urllib.parse import urlencode
+                post_data = urlencode({'dspymd': date}).encode('ascii')
+                req = urllib.request.Request(
+                    gauge_url,
+                    data=post_data,
+                    headers={
+                        'User-Agent':   'Mozilla/5.0 QuakeView/1.0',
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'Referer':      gauge_url,
+                    }
+                )
+            else:
+                req = urllib.request.Request(
+                    gauge_url,
+                    headers={'User-Agent': 'Mozilla/5.0 QuakeView/1.0'}
+                )
+
+            with urllib.request.urlopen(req, timeout=12, context=SSL_CTX) as r:
+                raw = r.read()
+
+            html = raw.decode('utf-8', errors='replace')
+
+            # ── <pre> ブロック抽出 ──────────────────────────────
+            pre_m = re.search(r'<pre>(.*?)</pre>', html, re.S | re.I)
+            if not pre_m:
+                self._send_json(404, {'error': 'データブロックが見つかりません（対応外の観測点の可能性）'})
+                return
+
+            pre = pre_m.group(1)
+
+            # メタデータ抽出
+            meta = {}
+            for pattern, key in [
+                (r'Location\s+(\S+)',        'location'),
+                (r'Longitude\s+([0-9\-]+)',  'longitude'),
+                (r'Latitude\s+([0-9\-]+)',   'latitude'),
+                (r'TidalHeightDatum\s+(.+)', 'datum'),
+            ]:
+                m = re.search(pattern, pre)
+                if m:
+                    meta[key] = m.group(1).strip()
+
+            # 5分値データ解析
+            # フォーマット: YYYY MM DD HH MM   cm
+            data_5min = []
+            for line in pre.split('\n'):
+                line = line.strip()
+                m = re.match(
+                    r'(\d{4})\s+(\d{2})\s+(\d{2})\s+(\d{2})\s+(\d{2})\s+(-?\d+)',
+                    line
+                )
+                if not m:
+                    continue
+                y, mo, d, h, mi, v_str = m.groups()
+                v = int(v_str)
+                data_5min.append({
+                    'time':  f'{h}:{mi}',
+                    'value': None if v == 9999 else v,
+                })
+
+            if not data_5min:
+                self._send_json(404, {'error': 'データ行が解析できませんでした'})
+                return
+
+            # 毎時テーブル解析
+            hourly = []
+            table_m = re.search(r'<table[^>]*>.*?</table>', html, re.S | re.I)
+            if table_m:
+                rows = re.findall(r'<tr[^>]*>(.*?)</tr>', table_m.group(), re.S | re.I)
+                if len(rows) >= 2:
+                    cells = re.findall(r'<td[^>]*>(.*?)</td>', rows[1], re.S | re.I)
+                    cells = [re.sub(r'<[^>]+>', '', c).strip() for c in cells]
+                    for i, c in enumerate(cells[1:], 0):   # cells[0] は日付
+                        try:
+                            hourly.append({'hour': i, 'value': int(c)})
+                        except ValueError:
+                            hourly.append({'hour': i, 'value': None})
+
+            # 観測済み点数・範囲
+            obs_vals = [p['value'] for p in data_5min if p['value'] is not None]
+
+            result = {
+                'station':     station,
+                'interval':    5,
+                'meta':        meta,
+                'data':        data_5min,
+                'hourly':      hourly,
+                'obs_count':   len(obs_vals),
+                'total_count': len(data_5min),
+                'source':      '海上保安庁',
+                'source_url':  gauge_url,
+                'attribution': (
+                    f'出典：海上保安庁ホームページ ({gauge_url}) '
+                    '／ QuakeViewにて数値データを加工・グラフ描画'
+                ),
+            }
+            self._send_json(200, result)
+
+        except urllib.error.URLError as e:
+            self._send_json(502, {'error': f'海保サーバーに接続できませんでした: {e}'})
+        except Exception as e:
+            self._send_json(500, {'error': str(e)})
+
     def _send_error(self, code: int, msg: str):
         self.send_response(code)
         self.send_header('Content-Type', 'text/plain')
@@ -795,15 +1067,15 @@ class Handler(BaseHTTPRequestHandler):
 #  スケジューラ (JMA自動取得)
 # =============================================================================
 def scraper_scheduler():
-    scraper_path = os.path.join(PROJECT_ROOT, 'hinet_jma_scraper.py')
-    if not os.path.exists(scraper_path): return
+    tools_path = os.path.join(PROJECT_ROOT, 'py', 'tools.py')
+    if not os.path.exists(tools_path): return
     while True:
         now = datetime.datetime.now()
         target = now.replace(hour=4, minute=0, second=0, microsecond=0)
         if now >= target: target += datetime.timedelta(days=1)
         time.sleep((target - now).total_seconds())
         try:
-            subprocess.run([sys.executable, scraper_path, '--auto'], cwd=PROJECT_ROOT)
+            subprocess.run([sys.executable, tools_path, 'scrape-hinet', '--auto'], cwd=PROJECT_ROOT)
         except: pass
 
 # =============================================================================
@@ -811,7 +1083,10 @@ def scraper_scheduler():
 # =============================================================================
 if __name__ == '__main__':
     print(f"Starting Integrated Server on http://localhost:{PORT}")
-    
+
+    # 0. Discord config を起動時にロード（/api/notify/quake に備えて）
+    _load_discord_cfg()
+
     # 1. リアルタイム震度解析スレッド
     t1 = threading.Thread(target=poll_shindo_loop, daemon=True)
     t1.start()
